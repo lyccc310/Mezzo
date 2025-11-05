@@ -1,8 +1,17 @@
-import React, { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Camera, Radio, MapPin, Users, HardDrive, Menu, Bell, Play, Volume2, Maximize, User } from 'lucide-react';
+import CameraMap from './assets/CameraMap';
+import VoiceControl from './assets/VoiceControl';
 
 function App() {
   const [activeMenu, setActiveMenu] = useState('Dashboard');
+  const [transcripts, setTranscripts] = useState<
+    { time: string, officer: string, text: string }[]
+  >([]);
+
+  const handleTranscript = (entry: { time: string, officer: string, text: string }) => {
+    setTranscripts((prev) => [...prev, entry]);
+  };
 
   const menuItems = [
     { name: 'Dashboard', icon: Menu },
@@ -23,13 +32,6 @@ function App() {
     { name: 'Officer Ramos', unit: 'Patrol Unit 2D', status: 'Active', color: 'green' },
   ];
 
-  const transcripts = [
-    { time: '10:23:15', officer: 'Rodriguez', text: 'Requesting backup at corner of Mabini and Rizal streets.' },
-    { time: '10:23:22', officer: 'Dispatch', text: 'Copy that Rodriguez, unit 5B is en route, ETA 3 minutes.' },
-    { time: '10:24:05', officer: 'Rodriguez', text: 'Suspect is approximately 5\'10", wearing blue jacket and black pants.' },
-    { time: '10:24:19', officer: 'Rodriguez', text: 'He\'s heading east on Rizal street on foot.' },
-  ];
-
   return (
     <div className="flex h-screen bg-gray-100">
       {/* Sidebar */}
@@ -43,9 +45,8 @@ function App() {
             <button
               key={item.name}
               onClick={() => setActiveMenu(item.name)}
-              className={`w-full flex items-center space-x-3 px-4 py-3 hover:bg-indigo-800 transition ${
-                activeMenu === item.name ? 'bg-indigo-800 border-l-4 border-white' : ''
-              }`}
+              className={`w-full flex items-center space-x-3 px-4 py-3 hover:bg-indigo-800 transition ${activeMenu === item.name ? 'bg-indigo-800 border-l-4 border-white' : ''
+                }`}
             >
               <item.icon className="w-5 h-5" />
               <span className="text-sm">{item.name}</span>
@@ -127,7 +128,12 @@ function App() {
               </span>
             </div>
             <div className="bg-indigo-900 aspect-video flex items-center justify-center relative">
-              <div className="text-white text-4xl font-bold">LIVE FEED (RTSP Stream)</div>
+              <img
+                src="http://220.135.209.219:8088/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1"
+                alt="Live Feed"
+                className="w-full h-full object-cover"
+                style={{ borderRadius: '0.5rem' }}
+              />
               <div className="absolute bottom-4 left-4 flex space-x-2">
                 <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
                   <Play className="w-4 h-4 text-white" />
@@ -162,13 +168,8 @@ function App() {
             <div className="p-4 border-b">
               <h2 className="font-semibold">GPS Tracking</h2>
             </div>
-            <div className="relative h-64 bg-blue-100">
-              <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-                <MapPin className="w-16 h-16" />
-              </div>
-              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                <div className="w-12 h-12 bg-blue-600 rounded-full border-4 border-white shadow-lg animate-pulse"></div>
-              </div>
+            <div className="p-4 h-64">
+              <CameraMap />
             </div>
             <div className="p-4 border-t">
               <div className="text-sm font-semibold mb-1">Officer Rodriguez</div>
@@ -187,24 +188,8 @@ function App() {
           </div>
         </div>
 
-        {/* Voice Communication and Speech to Text */}
         <div className="grid grid-cols-3 gap-6 px-6 pb-6">
-          {/* Voice Communication */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="font-semibold mb-4">Voice Communication</h2>
-            <div className="flex flex-col items-center space-y-4">
-              <button className="w-24 h-24 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg">
-                <Radio className="w-12 h-12 text-white" />
-              </button>
-              <div className="text-sm text-gray-600">Press and hold to talk</div>
-              <label className="flex items-center space-x-2 text-sm">
-                <input type="checkbox" className="rounded" />
-                <span>Voice Activation</span>
-              </label>
-            </div>
-          </div>
-
-          {/* Speech to Text */}
+          <VoiceControl onTranscript={handleTranscript} />
           <div className="col-span-2 bg-white rounded-lg shadow">
             <div className="p-4 border-b">
               <h2 className="font-semibold">Speech to Text</h2>
@@ -241,13 +226,12 @@ function App() {
                   </div>
                   <div className="flex items-center space-x-2">
                     <span
-                      className={`w-2 h-2 rounded-full ${
-                        officer.color === 'red'
-                          ? 'bg-red-500'
-                          : officer.color === 'green'
+                      className={`w-2 h-2 rounded-full ${officer.color === 'red'
+                        ? 'bg-red-500'
+                        : officer.color === 'green'
                           ? 'bg-green-500'
                           : 'bg-gray-400'
-                      }`}
+                        }`}
                     ></span>
                     <span className="text-sm">{officer.status}</span>
                   </div>
