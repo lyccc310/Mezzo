@@ -1,8 +1,17 @@
-import React, { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Camera, Radio, MapPin, Users, HardDrive, Menu, Bell, Play, Volume2, Maximize, User, Video, Mic, Settings, Shield, Group, UserCog2Icon, UserLock } from 'lucide-react';
+import CameraMap from './assets/CameraMap';
+import VoiceControl from './assets/VoiceControl';
 
 function App() {
   const [activeMenu, setActiveMenu] = useState('Dashboard');
+  const [transcripts, setTranscripts] = useState<
+    { time: string, officer: string, text: string }[]
+  >([]);
+
+  const handleTranscript = (entry: { time: string, officer: string, text: string }) => {
+    setTranscripts((prev) => [...prev, entry]);
+  };
 
   const menuItems = [
     { name: 'Dashboard', icon: Menu },
@@ -21,13 +30,6 @@ function App() {
     { name: 'Officer Dela Cruz', unit: 'Dispatch', status: 'Active', color: 'green' },
     { name: 'Officer Garcia', unit: 'Patrol Unit 3C', status: 'Offline', color: 'gray' },
     { name: 'Officer Ramos', unit: 'Patrol Unit 2D', status: 'Active', color: 'green' },
-  ];
-
-  const transcripts = [
-    { time: '10:23:15', officer: 'Rodriguez', text: 'Requesting backup at corner of Mabini and Rizal streets.' },
-    { time: '10:23:22', officer: 'Dispatch', text: 'Copy that Rodriguez, unit 5B is en route, ETA 3 minutes.' },
-    { time: '10:24:05', officer: 'Rodriguez', text: 'Suspect is approximately 5\'10", wearing blue jacket and black pants.' },
-    { time: '10:24:19', officer: 'Rodriguez', text: 'He\'s heading east on Rizal street on foot.' },
   ];
 
   return (
@@ -138,7 +140,12 @@ function App() {
                   </span>
                 </div>
                 <div className="bg-indigo-900 aspect-video flex items-center justify-center relative">
-                  <div className="text-white text-3xl font-bold">LIVE FEED (RTSP Stream)</div>
+                  <img
+                      src="http://220.135.209.219:8080/mjepg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1"
+                      alt="Live Feed"
+                      className="w-full h-full object-cover"
+                      style={{ borderRadius: '0.5rem'}}
+                  />
                   <div className="absolute bottom-4 left-4 flex space-x-2">
                     <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
                       <Play className="w-4 h-4 text-white" />
@@ -167,6 +174,52 @@ function App() {
                   </div>
                 </div>
               </div>
+        {/* Live Feed and GPS Section */}
+        <div className="grid grid-cols-3 gap-6 px-6 pb-6">
+          {/* Live Feed */}
+          <div className="col-span-2 bg-white rounded-lg shadow">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h2 className="font-semibold">Live Video Feed - Officer Rodriguez</h2>
+              <span className="flex items-center text-red-600 text-sm">
+                <span className="w-2 h-2 bg-red-600 rounded-full mr-2 animate-pulse"></span>
+                Recording
+              </span>
+            </div>
+            <div className="bg-indigo-900 aspect-video flex items-center justify-center relative">
+              <img
+                src="http://220.135.209.219:8088/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1"
+                alt="Live Feed"
+                className="w-full h-full object-cover"
+                style={{ borderRadius: '0.5rem' }}
+              />
+              <div className="absolute bottom-4 left-4 flex space-x-2">
+                <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
+                  <Play className="w-4 h-4 text-white" />
+                </button>
+                <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
+                  <Volume2 className="w-4 h-4 text-white" />
+                </button>
+              </div>
+              <div className="absolute bottom-4 right-4 flex space-x-2">
+                <button className="bg-red-600 hover:bg-red-700 p-2 rounded-full">
+                  <div className="w-3 h-3 bg-white rounded-full"></div>
+                </button>
+                <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
+                  <Maximize className="w-4 h-4 text-white" />
+                </button>
+              </div>
+            </div>
+            <div className="p-4">
+              <div className="flex justify-between text-xs text-gray-600 mb-2">
+                <span>09:00 AM</span>
+                <span className="text-blue-600">Current Time</span>
+                <span>05:00 PM</span>
+              </div>
+              <div className="w-full bg-gray-200 h-2 rounded">
+                <div className="bg-blue-500 h-2 rounded" style={{ width: '45%' }}></div>
+              </div>
+            </div>
+          </div>
 
               {/* Voice Communication and Speech to Text */}
               <div className="grid grid-cols-3 gap-4">
@@ -231,6 +284,48 @@ function App() {
                   </div>
                 </div>
               </div>
+          {/* GPS Tracking */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="p-4 border-b">
+              <h2 className="font-semibold">GPS Tracking</h2>
+            </div>
+            <div className="p-4 h-64">
+              <CameraMap />
+            </div>
+            <div className="p-4 border-t">
+              <div className="text-sm font-semibold mb-1">Officer Rodriguez</div>
+              <div className="text-xs text-gray-600">Last updated: 10:25 AM</div>
+              <div className="text-xs text-gray-600">14.5995° N, 120.9842° E</div>
+              <div className="text-xs text-gray-600 mb-3">Manila, Philippines</div>
+              <div className="flex space-x-2">
+                <button className="flex-1 px-3 py-1 border border-gray-300 rounded text-xs hover:bg-gray-50">
+                  History
+                </button>
+                <button className="flex-1 px-3 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700">
+                  Share Location
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-6 px-6 pb-6">
+          <VoiceControl onTranscript={handleTranscript} />
+          <div className="col-span-2 bg-white rounded-lg shadow">
+            <div className="p-4 border-b">
+              <h2 className="font-semibold">Speech to Text</h2>
+            </div>
+            <div className="p-4 space-y-3 h-64 overflow-y-auto">
+              {transcripts.map((item, index) => (
+                <div key={index} className="flex space-x-2">
+                  <span className="text-blue-600 font-mono text-xs">{item.time}</span>
+                  <span className="font-semibold text-xs">{item.officer}:</span>
+                  <span className="text-sm text-gray-700">{item.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
               {/* Team Status */}
               <div className="bg-white rounded-lg shadow-sm">
