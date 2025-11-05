@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Radio } from 'lucide-react';
+import {Mic, Radio} from 'lucide-react';
 interface Transcript {
   time: string;
   officer: string;
@@ -65,18 +65,22 @@ const VoiceControl = ({ onTranscript }: VoiceControlProps) => {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h2 className="font-semibold mb-4">Voice Communication</h2>
-      <div className="flex flex-col items-center space-y-4">
+    <div className="bg-white rounded-lg shadow-sm p-4">
+      <h2 className="font-semibold text-sm mb-4">Voice Communication</h2>
+      <div className="flex flex-col items-center space-y-3">
         <button
           onMouseDown={handleStart}
-          className={`w-24 h-24 ${isRecording ? 'bg-red-600' : 'bg-red-500'} hover:bg-red-700 rounded-full flex items-center justify-center shadow-lg`}
+          className={`w-20 h-20 ${isRecording ? 'bg-red-600' : 'bg-red-500'} hover:bg-red-700 rounded-full flex items-center justify-center shadow-lg`}
         >
-          <Radio className="w-12 h-12 text-white animate-pulse" />
+          <Mic className="w-12 h-12 text-white animate-pulse" />
         </button>
-        <div className="text-sm text-gray-600">
+        <div className="text-xs text-gray-600 text-center">
           {isRecording ? 'Listening...' : 'Press and hold to talk'}
         </div>
+        <label className="flex items-center space-x-2 text-xs">
+          <input type="checkbox" className="rounded" />
+          <span>Voice Activation</span>
+        </label>
         <div className="text-xs text-gray-500 italic">{transcript}</div>
       </div>
     </div>
