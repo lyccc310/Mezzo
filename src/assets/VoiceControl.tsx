@@ -65,14 +65,14 @@ const VoiceControl = ({ onTranscript }: VoiceControlProps) => {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm p-4">
-      <h2 className="font-semibold text-sm mb-4">Voice Communication</h2>
-      <div className="flex flex-col items-center space-y-3">
+    <div className="bg-white rounded-lg shadow-sm p-4 h-40">
+      <h2 className="font-semibold text-sm mb-4 ">Voice Communication</h2>
+      <div className="flex flex-col items-center space-y-3 ">
         <button
           onMouseDown={handleStart}
-          className={`w-20 h-20 ${isRecording ? 'bg-red-600' : 'bg-red-500'} hover:bg-red-700 rounded-full flex items-center justify-center shadow-lg`}
+          className={`w-10 h-10 ${isRecording ? 'bg-red-600' : 'bg-red-500'} hover:bg-red-700 rounded-full flex items-center justify-center shadow-lg`}
         >
-          <Mic className="w-12 h-12 text-white animate-pulse" />
+          <Mic className="w-4 h-4 text-white animate-pulse" />
         </button>
         <div className="text-xs text-gray-600 text-center">
           {isRecording ? 'Listening...' : 'Press and hold to talk'}

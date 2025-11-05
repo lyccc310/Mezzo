@@ -1,5 +1,21 @@
 import { useState } from 'react';
-import { Shield, Menu, Bell, Video, Play, MapPin, Users, Mic, Settings, UserLock, HardDrive, Volume2, Maximize, Radio } from 'lucide-react';
+import {
+  Shield,
+  Menu,
+  Bell,
+  Video,
+  Play,
+  MapPin,
+  Users,
+  Mic,
+  Settings,
+  UserLock,
+  HardDrive,
+  Volume2,
+  Maximize,
+  Radio,
+  Fullscreen
+} from 'lucide-react';
 import CameraMap from './assets/CameraMap';
 import VoiceControl from './assets/VoiceControl';
 function App() {
@@ -70,7 +86,7 @@ function App() {
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden mt-12">
           {/* Page Title Bar */}
-          <div className="bg-white border-b px-6 py-4">
+          <div className="border-b border-gray-200 px-6 py-4">
             <div className="flex items-center justify-between">
               <h1 className="text-2xl font-semibold text-gray-800">Dashboard</h1>
               <div className="flex items-center space-x-2">
@@ -87,8 +103,8 @@ function App() {
           <div className="flex-1 overflow-auto">
             {/* Stats Cards */}
             <div className="grid grid-cols-4 gap-4 p-6">
-              <div className="bg-white p-4 rounded-lg shadow-sm">
-                <div className="flex items-start justify-between mb-2">
+              <div className="bg-white p-4 rounded-lg shadow-sm h-26">
+                <div className="flex items-start justify-between">
                   <h3 className="text-gray-600 text-sm">Active Devices</h3>
                   <Video className="w-6 h-6 text-blue-500" />
                 </div>
@@ -96,17 +112,17 @@ function App() {
                 <div className="text-xs text-green-600 mt-1">+2 from yesterday</div>
               </div>
 
-              <div className="bg-white p-4 rounded-lg shadow-sm">
-                <div className="flex items-start justify-between mb-2">
+              <div className="bg-white p-4 rounded-lg shadow-sm h-26">
+                <div className="flex items-start justify-between">
                   <h3 className="text-gray-600 text-sm">Incidents Today</h3>
-                  <div className="text-2xl">⚠️</div>
+                  <div className="w-6 h-6 text-blue-500">⚠️</div>
                 </div>
                 <div className="text-3xl font-bold text-yellow-600">7</div>
                 <div className="text-xs text-red-600 mt-1">+3 from yesterday</div>
               </div>
 
-              <div className="bg-white p-4 rounded-lg shadow-sm">
-                <div className="flex items-start justify-between mb-2">
+              <div className="bg-white p-4 rounded-lg shadow-sm h-26">
+                <div className="flex items-start justify-between">
                   <h3 className="text-gray-600 text-sm">Active Officers</h3>
                   <div className="relative">
                     <Users className="w-6 h-6 text-green-500" />
@@ -117,8 +133,8 @@ function App() {
                 <div className="text-xs text-green-600 mt-1">All teams operational</div>
               </div>
 
-              <div className="bg-white p-4 rounded-lg shadow-sm">
-                <div className="flex items-start justify-between mb-2">
+              <div className="bg-white p-4 rounded-lg shadow-sm h-26">
+                <div className="flex items-start justify-between">
                   <h3 className="text-gray-600 text-sm">Storage Used</h3>
                   <HardDrive className="w-6 h-6 text-cyan-500" />
                 </div>
@@ -133,7 +149,7 @@ function App() {
               <div className="col-span-8 space-y-4">
                 {/* Live Feed */}
                 <div className="bg-white rounded-lg shadow-sm">
-                  <div className="p-3 border-b flex justify-between items-center">
+                  <div className="p-3 border-b border-gray-200 flex justify-between items-center">
                     <h2 className="font-semibold text-sm">Live Video Feed - Officer Rodriguez</h2>
                     <span className="flex items-center text-red-600 text-xs">
                     <span className="w-2 h-2 bg-red-600 rounded-full mr-2 animate-pulse"></span>
@@ -144,15 +160,15 @@ function App() {
                     <img
                         src="http://220.135.209.219:8088/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1"
                         alt="Live Feed"
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cove"
                         style={{ borderRadius: '0.5rem' }}
                     />
                     <div className="absolute bottom-4 left-4 flex space-x-2">
                       <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
-                        <Play className="w-4 h-4 text-white" />
+                        <Fullscreen className="w-4 h-4 text-black" />
                       </button>
                       <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
-                        <Volume2 className="w-4 h-4 text-white" />
+                        <Volume2 className="w-4 h-4 text-black" />
                       </button>
                     </div>
                   </div>
@@ -168,11 +184,11 @@ function App() {
                   </div>
                 </div>
                 {/* Voice Communication and Speech to Text */}
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                   {/* Voice Communication */}
                   <VoiceControl onTranscript={handleTranscript} />
-                  <div className="col-span-2 bg-white rounded-lg shadow">
-                    <div className="p-4 border-b">
+                  <div className="col-span bg-white rounded-lg shadow">
+                    <div className="p-4 border-b border-gray-200">
                       <h2 className="font-semibold">Speech to Text</h2>
                     </div>
                     <div className="p-4 space-y-3 h-64 overflow-y-auto">
@@ -191,7 +207,7 @@ function App() {
               {/* Right Column - GPS Tracking */}
               <div className="col-span-4">
                 <div className="bg-white rounded-lg shadow-sm">
-                  <div className="p-3 border-b">
+                  <div className="p-3 border-b border-gray-200">
                     <h2 className="font-semibold text-sm">GPS Tracking</h2>
                   </div>
                   <div className="relative h-64 bg-blue-50">
@@ -202,7 +218,7 @@ function App() {
                       <div className="w-10 h-10 bg-blue-600 rounded-full border-4 border-white shadow-lg animate-pulse"></div>
                     </div>
                   </div>
-                  <div className="p-3 border-t">
+                  <div className="p-3 border-t border-gray-200">
                     <div className="text-sm font-semibold mb-1">Officer Rodriguez</div>
                     <div className="text-xs text-gray-600">Last updated: 10:25 AM</div>
                     <div className="text-xs text-gray-600">14.5995° N, 120.9842° E</div>
@@ -219,7 +235,7 @@ function App() {
                 </div>
                 {/* Team Status */}
                   <div className="bg-white rounded-lg shadow-sm mt-4">
-                    <div className="p-3 border-b">
+                    <div className="p-3 border-b border-gray-200">
                       <h2 className="font-semibold text-sm">Team Status</h2>
                     </div>
                     <div className="p-3 space-y-2.5">
@@ -252,7 +268,7 @@ function App() {
                   </div>
                 {/* Recent Alerts */}
                   <div className="bg-white rounded-lg shadow-sm gap-4 mt-4">
-                    <div className="p-3 border-b">
+                    <div className="p-3 border-b border-gray-200">
                       <h2 className="font-semibold text-sm">Recent Alerts</h2>
                     </div>
                     <div className="p-3">
