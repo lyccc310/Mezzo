@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import {
   Shield,
-  Menu,
-  Bell,
   Video,
   Play,
   MapPin,
@@ -12,9 +10,10 @@ import {
   UserLock,
   HardDrive,
   Volume2,
-  Maximize,
-  Radio,
-  Fullscreen, User, UserCircle, Calendar, GaugeCircle
+  Fullscreen,
+  UserCircle,
+  Calendar,
+  GaugeCircle, Disc2
 } from 'lucide-react';
 import CameraMap from './assets/CameraMap';
 import VoiceControl from './assets/VoiceControl';
@@ -183,7 +182,8 @@ function App() {
                         className="w-full h-full object-cover"
                         style={{ borderRadius: '0.5rem' }}
                     />
-                    <div className="absolute bottom-4 left-4 flex space-x-2">
+                    <div className="absolute bottom-4 flex w-full justify-between px-4">
+                      <div className="space-x-2">
                       <button onClick={toggleFullscreen}
                           className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded"
                           title="Toggle Fullscreen">
@@ -191,7 +191,15 @@ function App() {
                       </button>
                       <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
                         <Volume2 className="w-4 h-4 text-black" />
+                      </button></div>
+
+                      <div className="space-x-2">
+                      <button className="bg-red-600 bg-opacity-20 hover:bg-opacity-30 p-2 rounded right-auto">
+                        <Disc2 className="w-4 h-4 text-white" />
                       </button>
+                      <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
+                        <Settings className="w-4 h-4 text-black" />
+                      </button></div>
                     </div>
                   </div>
                   <div className="p-3">
@@ -218,7 +226,7 @@ function App() {
                     <div className="p-4 border-b border-gray-200">
                       <h2 className="font-semibold">Speech to Text</h2>
                     </div>
-                    <div className="p-4 space-y-1 h-64 overflow-y-auto">
+                    <div className="p-4 space-y-1 overflow-y-auto">
                       {transcripts.map((item, index) => (
                           <div key={index} className="bg-gray-50 p-2 rounded">
                             <div className="flex items-start space-x-2">
@@ -236,31 +244,7 @@ function App() {
               {/* Right Column - GPS Tracking */}
               <div className="col-span-4">
                 <div className="bg-white rounded-lg shadow-sm">
-                  <div className="p-3 border-b border-gray-200">
-                    <h2 className="font-semibold text-sm">GPS Tracking</h2>
-                  </div>
-                  <div className="relative h-64 bg-blue-50">
-                    <div className="absolute inset-0 flex items-center justify-center text-gray-300">
-                      <CameraMap />
-                    </div>
-                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                      <div className="w-10 h-10 bg-blue-600 rounded-full border-4 border-white shadow-lg animate-pulse"></div>
-                    </div>
-                  </div>
-                  <div className="p-3 border-t border-gray-200">
-                    <div className="text-sm font-semibold mb-1">Officer Rodriguez</div>
-                    <div className="text-xs text-gray-600">Last updated: 10:25 AM</div>
-                    <div className="text-xs text-gray-600">14.5995° N, 120.9842° E</div>
-                    <div className="text-xs text-gray-600 mb-3">Manila, Philippines</div>
-                    <div className="space-x-2">
-                      <button className="flex-1 px-1 py-1.5 text-blue-700 border border-blue-700 rounded text-xs hover:bg-gray-50">
-                        History
-                      </button>
-                      <button className="flex-1 px-1 py-1.5 text-blue-700 border border-blue-700 rounded text-xs hover:bg-blue-700">
-                        Share Location
-                      </button>
-                    </div>
-                  </div>
+                  <CameraMap />
                 </div>
                 {/* Team Status */}
                   <div className="bg-white rounded-lg shadow-sm mt-4">
