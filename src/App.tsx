@@ -197,9 +197,11 @@ function App() {
                   <div className="p-3">
                     {/* 錄影片段標記（在時間軸上方） */}
                     <div className="relative w-full h-4 mb-1 bg-gray-200">
-                      <div className="absolute bg-blue-300 h-4 rounded" style={{ left: '25%', width: '12%', top: '0' }}></div>
-                      <div className="absolute bg-blue-300 h-4 rounded" style={{ left: '45%', width: '10%', top: '0' }}></div>
-                      <div className="absolute bg-blue-300 h-4 rounded" style={{ left: '58%', width: '8%', top: '0' }}></div>
+                      <div className="absolute bg-blue-200 h-4 flex" style={{ left: '25%', width: '30%', top: '0' }}>
+                        <div className="w-0.5 h-full bg-blue-600"></div>
+                        <div className="flex-1 h-full bg-blue-200"></div>
+                        <div className="w-0.5 h-full bg-blue-600"></div>
+                      </div>
                     </div>
                     <div className="flex justify-between text-xs text-black mb-2">
                       <span>09:00 AM</span>
