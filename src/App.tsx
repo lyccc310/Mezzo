@@ -14,7 +14,7 @@ import {
   Volume2,
   Maximize,
   Radio,
-  Fullscreen
+  Fullscreen, User, UserCircle, Calendar, GaugeCircle
 } from 'lucide-react';
 import CameraMap from './assets/CameraMap';
 import VoiceControl from './assets/VoiceControl';
@@ -23,13 +23,33 @@ function App() {
   const [transcripts, setTranscripts] = useState<
       { time: string, officer: string, text: string }[]
   >([]);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const videoContainerRef = useState<HTMLDivElement | null>(null)[0];
 
   const handleTranscript = (entry: { time: string, officer: string, text: string }) => {
     setTranscripts((prev) => [...prev, entry]);
   };
 
+  // 新增全螢幕切換函數 For Video
+  const toggleFullscreen = () => {
+    const container = document.getElementById('video-container');
+    if (!container) return;
+
+    if (!document.fullscreenElement) {
+      container.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+      }).catch((err) => {
+        console.error('Error attempting to enable fullscreen:', err);
+      });
+    } else {
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+      });
+    }
+  };
+
   const menuItems = [
-    { name: 'Dashboard', icon: Menu },
+    { name: 'Dashboard', icon: GaugeCircle },
     { name: 'Live Feed', icon: Video },
     { name: 'Playback', icon: Play },
     { name: 'GPS Tracking', icon: MapPin },
@@ -77,7 +97,7 @@ function App() {
           </div>
           <div className="flex items-center space-x-3">
             <div className="flex items-center space-x-2">
-              <Bell className="w-4 h-4" />
+              <UserCircle className="w-4 h-4 fill" />
               <span className="text-sm">Admin User</span>
             </div>
           </div>
@@ -93,8 +113,8 @@ function App() {
                 <button className="px-3 py-1.5 border border-gray-300 text-gray-700 rounded text-sm hover:bg-gray-50">
                   Export
                 </button>
-                <button className="px-3 py-1.5 border border-gray-300 text-gray-700 rounded text-sm hover:bg-gray-50">
-                  📅 Today
+                <button className="flex px-3 py-1.5 border border-gray-300 text-gray-700 rounded text-sm hover:bg-gray-50">
+                  <Calendar className="w-4 h-4"/>&nbsp;Today
                 </button>
               </div>
             </div>
@@ -106,7 +126,7 @@ function App() {
               <div className="bg-white p-4 rounded-lg shadow-sm h-26">
                 <div className="flex items-start justify-between">
                   <h3 className="text-gray-600 text-sm">Active Devices</h3>
-                  <Video className="w-6 h-6 text-blue-500" />
+                  <Video className="w-6 h-6 text-blue-500 fill-blue-500" />
                 </div>
                 <div className="text-3xl font-bold text-blue-600">24</div>
                 <div className="text-xs text-green-600 mt-1">+2 from yesterday</div>
@@ -148,7 +168,7 @@ function App() {
               {/* Left Column - Live Feed + Voice Communication*/}
               <div className="col-span-8 space-y-4">
                 {/* Live Feed */}
-                <div className="bg-white rounded-lg shadow-sm">
+                <div className="bg-white rounded-lg shadow-sm" id="video-container">
                   <div className="p-3 border-b border-gray-200 flex justify-between items-center">
                     <h2 className="font-semibold text-sm">Live Video Feed - Officer Rodriguez</h2>
                     <span className="flex items-center text-red-600 text-xs">
@@ -160,11 +180,13 @@ function App() {
                     <img
                         src="http://220.135.209.219:8088/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1"
                         alt="Live Feed"
-                        className="w-full h-full object-cove"
+                        className="w-full h-full object-cover"
                         style={{ borderRadius: '0.5rem' }}
                     />
                     <div className="absolute bottom-4 left-4 flex space-x-2">
-                      <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
+                      <button onClick={toggleFullscreen}
+                          className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded"
+                          title="Toggle Fullscreen">
                         <Fullscreen className="w-4 h-4 text-black" />
                       </button>
                       <button className="bg-white bg-opacity-20 hover:bg-opacity-30 p-2 rounded">
@@ -173,13 +195,16 @@ function App() {
                     </div>
                   </div>
                   <div className="p-3">
-                    <div className="flex justify-between text-xs text-gray-500 mb-2">
+                    {/* 錄影片段標記（在時間軸上方） */}
+                    <div className="relative w-full h-4 mb-1 bg-gray-200">
+                      <div className="absolute bg-blue-300 h-4 rounded" style={{ left: '25%', width: '12%', top: '0' }}></div>
+                      <div className="absolute bg-blue-300 h-4 rounded" style={{ left: '45%', width: '10%', top: '0' }}></div>
+                      <div className="absolute bg-blue-300 h-4 rounded" style={{ left: '58%', width: '8%', top: '0' }}></div>
+                    </div>
+                    <div className="flex justify-between text-xs text-black mb-2">
                       <span>09:00 AM</span>
                       <span className="text-blue-600 font-medium">Current Time</span>
                       <span>05:00 PM</span>
-                    </div>
-                    <div className="w-full bg-gray-200 h-1.5 rounded-full">
-                      <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: '45%' }}></div>
                     </div>
                   </div>
                 </div>
