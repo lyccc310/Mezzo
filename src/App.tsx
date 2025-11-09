@@ -218,12 +218,14 @@ function App() {
                     <div className="p-4 border-b border-gray-200">
                       <h2 className="font-semibold">Speech to Text</h2>
                     </div>
-                    <div className="p-4 space-y-3 h-64 overflow-y-auto">
+                    <div className="p-4 space-y-1 h-64 overflow-y-auto">
                       {transcripts.map((item, index) => (
-                          <div key={index} className="flex space-x-2">
-                            <span className="text-blue-600 font-mono text-xs">{item.time}</span>
-                            <span className="font-semibold text-xs">{item.officer}:</span>
-                            <span className="text-sm text-gray-700">{item.text}</span>
+                          <div key={index} className="bg-gray-50 p-2 rounded">
+                            <div className="flex items-start space-x-2">
+                              <span className="text-blue-600 font-mono text-xs font-semibold whitespace-nowrap">{item.time}</span>
+                              <span className="font-semibold text-xs text-green-600">{item.officer}:</span>
+                              <span className="text-xs text-gray-700 ml-1">{item.text}</span>
+                            </div>
                           </div>
                       ))}
                     </div>
