@@ -18,12 +18,43 @@ import {
 import CameraMap from './assets/CameraMap';
 import VoiceControl from './assets/VoiceControl';
 function App() {
+  //login error(沒輸 Name 或 Unit)
+  const [loginError, setLoginError] = useState('');
   const [activeMenu, setActiveMenu] = useState('Dashboard');
   const [transcripts, setTranscripts] = useState<
       { time: string, officer: string, text: string }[]
   >([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const videoContainerRef = useState<HTMLDivElement | null>(null)[0];
+  // 使用者資訊(含登入狀態)
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userName, setUserName] = useState('');
+  const [userUnit, setUserUnit] = useState('');
+  const [inputName, setInputName] = useState('');
+  const [inputUnit, setInputUnit] = useState('Patrol Unit 7A');
+  const [teamStatus, setTeamStatus] = useState([
+    { id: 1, name: 'Officer Rodriguez', unit: 'Patrol Unit 7A', status: 'Live', color: 'red' },
+    { id: 2, name: 'Officer Santos', unit: 'Patrol Unit 5B', status: 'Active', color: 'green' },
+    { id: 3, name: 'Officer Dela Cruz', unit: 'Dispatch', status: 'Active', color: 'green' },
+    { id: 4, name: 'Officer Garcia', unit: 'Patrol Unit 3C', status: 'Offline', color: 'gray' },
+    { id: 5, name: 'Officer Ramos', unit: 'Patrol Unit 2D', status: 'Active', color: 'green' },
+  ]);
+
+  const handleLogin = () => {
+    if (!inputName.trim() || !inputUnit.trim()) {
+      setLoginError('Please enter both name and unit');
+      return;
+    }
+    setUserName(inputName.trim());
+    setUserUnit(inputUnit.trim());
+    setIsLoggedIn(true);
+
+    // 更新第一個成員為登入使用者
+    setTeamStatus(prev => [
+        { id: 1, name: inputName.trim(), unit: inputUnit.trim(), status: 'Live', color: 'red' },
+        ...prev.slice(1)
+      ]);
+  };
 
   const handleTranscript = (entry: { time: string, officer: string, text: string }) => {
     setTranscripts((prev) => [...prev, entry]);
@@ -58,14 +89,59 @@ function App() {
     { name: 'User Accounts', icon: UserLock },
   ];
 
-  const teamStatus = [
-    { name: 'Officer Rodriguez', unit: 'Patrol Unit 7A', status: 'Live', color: 'red' },
-    { name: 'Officer Santos', unit: 'Patrol Unit 5B', status: 'Active', color: 'green' },
-    { name: 'Officer Dela Cruz', unit: 'Dispatch', status: 'Active', color: 'green' },
-    { name: 'Officer Garcia', unit: 'Patrol Unit 3C', status: 'Offline', color: 'gray' },
-    { name: 'Officer Ramos', unit: 'Patrol Unit 2D', status: 'Active', color: 'green' },
-  ];
-
+  if (!isLoggedIn) {
+    return (
+        <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-900 to-blue-800">
+          <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-md">
+            <div className="flex items-center justify-center mb-6">
+              <Shield className="w-12 h-12 text-indigo-600 mr-3" />
+              <h1 className="text-2xl font-bold text-gray-800">Police Body Camera System</h1>
+            </div>
+            <h2 className="text-xl font-semibold text-gray-700 mb-6 text-center">Welcome</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Enter Your Name
+                </label>
+                <input
+                    type="text"
+                    value={inputName}
+                    onChange={(e) => setInputName(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+                    placeholder="e.g., Rodriguez"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    autoFocus
+                />
+                <label className="block text-sm font-medium text-gray-700 mb-2 mt-2">
+                  Enter Your Unit
+                </label>
+                <input
+                    type="text"
+                    value={inputUnit}
+                    onChange={(e) => setInputUnit(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+                    placeholder="e.g., Patrol Unit 7A"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    autoFocus
+                />
+              </div>
+              {/*沒輸 name or unit 顯示錯誤訊息*/}
+              {loginError && (
+                  <div className="text-red-600 text-sm text-center">
+                    {loginError}
+                  </div>
+              )}
+              <button
+                  onClick={handleLogin}
+                  className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition"
+              >
+                Enter System
+              </button>
+            </div>
+          </div>
+        </div>
+    );
+  }
   return (
       <div className="flex h-screen bg-gray-50 relative">
         {/* Sidebar */}
@@ -97,7 +173,7 @@ function App() {
           <div className="flex items-center space-x-3">
             <div className="flex items-center space-x-2">
               <UserCircle className="w-4 h-4 fill" />
-              <span className="text-sm">Admin User</span>
+              <span className="text-sm">{userName}</span>
             </div>
           </div>
         </div>
@@ -180,7 +256,7 @@ function App() {
                         src="http://220.135.209.219:8088/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1"
                         alt="Live Feed"
                         className="w-full h-full object-cover"
-                        style={{ borderRadius: '0.5rem' }}
+                        // style={{ borderRadius: '0.5rem' }}
                     />
                     <div className="absolute bottom-4 flex w-full justify-between px-4">
                       <div className="space-x-2">
@@ -256,7 +332,7 @@ function App() {
                           <div key={index} className="flex items-center justify-between">
                             <div className="flex items-center space-x-2.5">
                               <div className="w-9 h-9 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-xs">
-                                {officer.name.split(' ')[1].substring(0, 2).toUpperCase()}
+                                {(officer.name.split(' ')[1] || officer.name).substring(0, 2).toUpperCase()}
                               </div>
                               <div>
                                 <div className="font-semibold text-xs">{officer.name}</div>

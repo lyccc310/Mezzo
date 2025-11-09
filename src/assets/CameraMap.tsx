@@ -58,11 +58,11 @@ const CameraMap = () => {
             </div>
             <div className="space-x-2 mt-1">
               <button
-                  className="flex-1 px-1 py-1 text-blue-700 border border-blue-700 rounded text-xs hover:bg-gray-50">
+                  className="flex-1 px-1 py-1 text-blue-700 border border-blue-700 rounded text-xs hover:bg-gray-100">
                 History
               </button>
               <button
-                  className="flex-1 px-1 py-1 text-blue-700 border border-blue-700 rounded text-xs hover:bg-blue-700">
+                  className="flex-1 px-1 py-1 text-blue-700 border border-blue-700 rounded text-xs hover:bg-gray-100">
                 Share Location
               </button>
             </div>
