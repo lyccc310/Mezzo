@@ -1,5 +1,10 @@
 import { useState, useRef } from 'react';
+<<<<<<< HEAD
 import {Mic, Radio} from 'lucide-react';
+=======
+import { Radio } from 'lucide-react';
+
+>>>>>>> a6e25de (mqtt)
 interface Transcript {
   time: string;
   officer: string;
@@ -9,13 +14,15 @@ interface Transcript {
 interface VoiceControlProps {
   onTranscript: (entry: Transcript) => void;
 }
+
 const VoiceControl = ({ onTranscript }: VoiceControlProps) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const recognitionRef = useRef<any>(null); // 型別不明確時用 any
+  const recognitionRef = useRef<any>(null);
 
   const handleStart = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       alert('Your browser does not support Speech Recognition.');
       return;
@@ -32,12 +39,13 @@ const VoiceControl = ({ onTranscript }: VoiceControlProps) => {
     recognition.onresult = (event: any) => {
       const text = event.results[0][0].transcript;
       setTranscript(text);
+      console.log('🎤 Transcribed:', text);
 
       const now = new Date();
       const time = now.toLocaleTimeString('en-US', { hour12: false });
       const entry = { time, officer: 'Rodriguez', text };
 
-      onTranscript(entry); // ✅ 傳回給 App.tsx
+      onTranscript(entry);
       sendToServer(text);
     };
 
@@ -51,6 +59,7 @@ const VoiceControl = ({ onTranscript }: VoiceControlProps) => {
   };
 
   const sendToServer = async (text: string) => {
+    console.log('📤 Sending to server:', text);
     try {
       const res = await fetch('http://localhost:4000/voice-message', {
         method: 'POST',
@@ -58,9 +67,9 @@ const VoiceControl = ({ onTranscript }: VoiceControlProps) => {
         body: JSON.stringify({ message: text }),
       });
       const data = await res.json();
-      console.log('Server response:', data);
+      console.log('✅ Server response:', data);
     } catch (err) {
-      console.error('Failed to send message:', err);
+      console.error('❌ Failed to send message:', err);
     }
   };
 
