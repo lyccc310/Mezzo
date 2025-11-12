@@ -1,10 +1,5 @@
 import { useState, useRef } from 'react';
-<<<<<<< HEAD
 import {Mic, Radio} from 'lucide-react';
-=======
-import { Radio } from 'lucide-react';
-
->>>>>>> a6e25de (mqtt)
 interface Transcript {
   time: string;
   officer: string;
