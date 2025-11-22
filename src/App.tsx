@@ -18,6 +18,7 @@ import {
   Volume2,
   Maximize,
   Disc2,
+  X
 } from 'lucide-react';
 import CameraMap from './assets/CameraMap';
 import VoiceControl from './assets/VoiceControl';
@@ -131,6 +132,17 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript }: { teamStatus: Team
   const streamRef = useRef<MediaStream | null>(null);
   const animationIdRef = useRef<number | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const [notification, setNotification] = useState<{ message: string; visible: boolean }>({
+    message: '',
+    visible: false,
+  });
+  //錄影和截圖的提示
+  const showNotification = (message: string) => {
+    setNotification({ message, visible: true });
+    setTimeout(() => {
+      setNotification({ message: '', visible: false });
+    }, 3000); // 提示 3 秒後自動消失
+  };
 
   const handleTranscript = (entry: { time: string, officer: string, text: string }) => {
     onTranscript(entry);
@@ -188,6 +200,7 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript }: { teamStatus: Team
           a.click();
           URL.revokeObjectURL(url);
           console.log('✅ 截圖已保存');
+          showNotification('螢幕已截圖');
         }
       }, 'image/png');
     } catch (error) {
@@ -294,8 +307,10 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript }: { teamStatus: Team
   const toggleRecording = () => {
     if (isRecording) {
       stopRecording();
+      showNotification('錄影檔案已儲存');
     } else {
       startRecording();
+      showNotification('已開始錄影');
     }
   };
 
@@ -388,7 +403,15 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript }: { teamStatus: Team
                     <Volume2 className="w-4 h-4 text-black" />
                   </button>
                 </div>
-
+                {/* 提示訊息 */}
+                {notification.visible && (
+                    <div className="absolute bottom-full mb-2 right-2 bg-white text-black px-2 py-1 rounded shadow-lg flex items-center space-x-2 z-50">
+                      <span style={{ fontSize: '12px' }}>{notification.message}</span>
+                      <button onClick={() => setNotification({ message: '', visible: false })}>
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                )}
                 <div className="space-x-2">
                   <button
                     onClick={toggleRecording}
