@@ -182,11 +182,11 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
             }
 
             // 創建只包含視訊的新流
-            const videoOnlyStream = new MediaStream(videoTracks);
+            // const videoOnlyStream = new MediaStream(videoTracks);
 
             // 只在需要時更新
-            if (localVideoRef.current.srcObject !== videoOnlyStream) {
-                localVideoRef.current.srcObject = videoOnlyStream;
+            if (localVideoRef.current.srcObject !== localStreamRef.current) {
+                localVideoRef.current.srcObject = localStreamRef.current;
 
                 // 確保播放
                 const playPromise = localVideoRef.current.play();
@@ -218,11 +218,7 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
         updateLocalVideo();
 
         // 設置定時器確保更新 (每秒檢查一次)
-        const intervalId = setInterval(updateLocalVideo, 1000);
-
-        return () => {
-            clearInterval(intervalId);
-        };
+        // const intervalId = setInterval(updateLocalVideo, 1000);
     }, [isVideoEnabled, isInCall]);
 
     const initializeLocalStream = async (includeVideo: boolean = false) => {
@@ -274,6 +270,17 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
 
     const createPeerConnection = (userId: string, userName: string): RTCPeerConnection => {
         const pc = new RTCPeerConnection(rtcConfig);
+
+        // 監聽 ICE candidate 事件
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                console.log('🧊 發送 ICE candidate 給:', userName);
+                socketRef.current?.emit('ice-candidate', {
+                    candidate: event.candidate,
+                    to: userId,
+                });
+            }
+        };
 
         if (localStreamRef.current) {
             localStreamRef.current.getTracks().forEach((track) => {
@@ -889,6 +896,7 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                             <div className="bg-gray-900 rounded-lg overflow-hidden">
                                 <video
                                     ref={localVideoRef}
+                                    style={{ transform: 'scaleX(-1)' }}
                                     autoPlay
                                     playsInline
                                     muted
@@ -974,6 +982,7 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                                                     videoElementsRef.current.delete(userId);
                                                 }
                                             }}
+                                            style={{ transform: 'scaleX(-1)' }}
                                             autoPlay
                                             playsInline
                                             className="w-full aspect-video object-cover bg-gray-800"
