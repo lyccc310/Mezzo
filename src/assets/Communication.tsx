@@ -65,7 +65,7 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
     const [isMediaController, setIsMediaController] = useState(false);
     
     // Draggable control panel state
-    const [controlPanelPosition, setControlPanelPosition] = useState({ x: window.innerWidth - 320, y: window.innerHeight - 400 });
+    const [controlPanelPosition, setControlPanelPosition] = useState({ x: 0, y: window.innerHeight - 120 });
     const [isDragging, setIsDragging] = useState(false);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     
@@ -720,8 +720,8 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                     </div>
                 </div>
             </div>
-
-            <div className="px-6 pt-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 px-6 pb-6">
+            <div className="col-span-2 space-y-6">
                 <div className="bg-white rounded-lg shadow-sm overflow-hidden">
                     <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
                         <div className="flex items-center space-x-2">
@@ -809,9 +809,26 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                         {renderMediaContent()}
                     </div>
                 </div>
+
+                {/*Group Communication 使用解釋 */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+                    <h3 className="font-semibold text-blue-900 mb-3 flex items-center">
+                        <Phone className="w-5 h-5 mr-2" />
+                        How to Use Group Communication
+                    </h3>
+                    <ul className="space-y-2 text-sm text-blue-800">
+                        <li>• 確保信令服務器正在運行 (http://localhost:3001)</li>
+                        <li>• 點擊「Join Call」加入語音頻道(自動開啟相機)</li>
+                        <li>• 使用相機按鈕切換視訊開/關</li>
+                        <li>• 點擊「Request Control」請求共享畫面控制權</li>
+                        <li>• 獲得控制權後可切換串流/上傳圖片/影片</li>
+                        <li>• 右側顯示參與者的相機畫面</li>
+                        <li>• 使用麥克風/喇叭圖示控制音訊</li>
+                    </ul>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 px-6 py-6">
+            <div className="col-span-1">
                 <div className="lg:col-span-2 space-y-6">
                     {/* Control Panel - Floating when video is enabled */}
                     {isInCall && isVideoEnabled ? (
@@ -840,6 +857,12 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                                         console.error('❌ 本地視訊錯誤:', e);
                                     }}
                                 />
+                                <div className="bg-gray-800 px-3 py-2 text-center">
+                                    <div className="font-semibold text-sm text-white flex items-center">
+                                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></span>
+                                        {currentUser.name} (You)
+                                    </div>
+                                </div>
                             </div>
 
                             {/* Floating Control Panel - Draggable */}
@@ -853,13 +876,9 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                                     cursor: isDragging ? 'grabbing' : 'grab',
                                     zIndex: 50,
                                 }}
-                                className="bg-white rounded-lg shadow-lg p-4 w-80"
+                                className="bg-white rounded-lg shadow-xl p-4 w-80 ring ring-gray-300"
                             >
-                                <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center">
-                                    <Camera className="w-4 h-4 mr-2 text-blue-600" />
-                                    Your Camera
-                                </h3>
-
+                               
                                 {/* Status Indicators */}
                                 <div className="flex justify-center space-x-6 text-xs mb-4 pb-4 border-b border-gray-200">
                                     <div className={`flex items-center space-x-1 ${isMuted ? 'text-red-600' : 'text-green-600'}`}>
@@ -917,13 +936,6 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                                     >
                                         <PhoneOff className="w-5 h-5" />
                                     </button>
-                                </div>
-
-                                <div className="text-center">
-                                    <div className="font-semibold text-xs text-gray-600 mt-3 flex items-center justify-center">
-                                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></span>
-                                        {currentUser.name} (You)
-                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1034,25 +1046,9 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                             </div>
                         </div>
                     )}
-
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
-                        <h3 className="font-semibold text-blue-900 mb-3 flex items-center">
-                            <Phone className="w-5 h-5 mr-2" />
-                            How to Use Group Communication
-                        </h3>
-                        <ul className="space-y-2 text-sm text-blue-800">
-                            <li>• 確保信令服務器正在運行 (http://localhost:3001)</li>
-                            <li>• 點擊「Join Call」加入語音頻道(自動開啟相機)</li>
-                            <li>• 使用相機按鈕切換視訊開/關</li>
-                            <li>• 點擊「Request Control」請求共享畫面控制權</li>
-                            <li>• 獲得控制權後可切換串流/上傳圖片/影片</li>
-                            <li>• 右側顯示參與者的相機畫面</li>
-                            <li>• 使用麥克風/喇叭圖示控制音訊</li>
-                        </ul>
-                    </div>
                 </div>
 
-                <div className="space-y-6">
+                <div className="space-y-6 mt-6">
                     <div className="bg-white rounded-lg shadow-sm">
                         <div className="p-4 border-b border-gray-200">
                             <h2 className="font-semibold flex items-center">
@@ -1167,6 +1163,7 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                     </div>
                 </div>
             </div>
+        </div>
         </div>
     );
 };
