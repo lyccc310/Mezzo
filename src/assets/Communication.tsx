@@ -63,7 +63,14 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
     });
     const [showMediaSelector, setShowMediaSelector] = useState(false);
     const [isMediaController, setIsMediaController] = useState(false);
+    
+    // Draggable control panel state
+    const [controlPanelPosition, setControlPanelPosition] = useState({ x: window.innerWidth - 320, y: window.innerHeight - 400 });
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+    
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const controlPanelRef = useRef<HTMLDivElement>(null);
 
     const localStreamRef = useRef<MediaStream | null>(null);
     const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -266,6 +273,30 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
             }
             throw error;
         }
+    };
+
+    // 讓控制面板可在畫面中拖移
+    const handleDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!(e.target as HTMLElement).closest('button')) {
+            setIsDragging(true);
+            setDragOffset({
+                x: e.clientX - controlPanelPosition.x,
+                y: e.clientY - controlPanelPosition.y,
+            });
+        }
+    };
+
+    const handleDragMove = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (isDragging) {
+            setControlPanelPosition({
+                x: e.clientX - dragOffset.x,
+                y: e.clientY - dragOffset.y,
+            });
+        }
+    };
+
+    const handleDragEnd = () => {
+        setIsDragging(false);
     };
 
     const createPeerConnection = (userId: string, userName: string): RTCPeerConnection => {
@@ -488,6 +519,7 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
         setParticipantsInCall([]);
         setConnectionStatus('disconnected');
         setIsMediaController(false);
+        setControlPanelPosition({ x: 0, y: 0 }); // Reset panel position
     };
 
     const handleUserLeft = (userId: string) => {
@@ -781,118 +813,15 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 px-6 py-6">
                 <div className="lg:col-span-2 space-y-6">
-                    <div className="bg-white rounded-lg shadow-sm p-8">
-                        <div className="text-center space-y-6">
-                            <div className="flex justify-center">
-                                <div
-                                    className={`w-32 h-32 rounded-full flex items-center justify-center ${isInCall ? 'bg-green-500 animate-pulse' : 'bg-gray-200'
-                                        }`}
-                                >
-                                    <Users
-                                        className={`w-16 h-16 ${isInCall ? 'text-white' : 'text-gray-400'
-                                            }`}
-                                    />
-                                </div>
-                            </div>
-
-                            <div>
-                                <h2 className="text-2xl font-bold text-gray-800">
-                                    {isInCall ? 'Group Call Active' : 'No Active Call'}
-                                </h2>
-                                <p className="text-gray-600 mt-2">
-                                    {isInCall
-                                        ? otherParticipants.length === 0
-                                            ? 'You are alone in the call'
-                                            : `${otherParticipants.length} other participant${otherParticipants.length > 1 ? 's' : ''
-                                            } in call`
-                                        : 'Start a group call and discuss the shared incident view together'}
-                                </p>
-                            </div>
-
-                            <div className="flex justify-center space-x-4">
-                                {!isInCall ? (
-                                    <button
-                                        onClick={joinCall}
-                                        disabled={connectionStatus === 'connecting'}
-                                        className="bg-green-500 hover:bg-green-600 disabled:bg-green-300 text-white px-8 py-4 rounded-full flex items-center space-x-2 shadow-lg transition"
-                                    >
-                                        <Phone className="w-6 h-6" />
-                                        <span className="font-semibold">
-                                            {connectionStatus === 'connecting' ? 'Connecting...' : 'Join Call'}
-                                        </span>
-                                    </button>
-                                ) : (
-                                    <>
-                                        <button
-                                            onClick={toggleMute}
-                                            className={`${isMuted
-                                                ? 'bg-red-500 hover:bg-red-600 text-white'
-                                                : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                                                } px-6 py-4 rounded-full transition shadow`}
-                                            title={isMuted ? 'Unmute' : 'Mute'}
-                                        >
-                                            {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-                                        </button>
-
-                                        <button
-                                            onClick={toggleVideo}
-                                            className={`${!isVideoEnabled
-                                                ? 'bg-red-500 hover:bg-red-600 text-white'
-                                                : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                                                } px-6 py-4 rounded-full transition shadow`}
-                                            title={isVideoEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
-                                        >
-                                            {isVideoEnabled ? <Camera className="w-6 h-6" /> : <CameraOff className="w-6 h-6" />}
-                                        </button>
-
-                                        <button
-                                            onClick={toggleSpeaker}
-                                            className={`${!isSpeakerOn
-                                                ? 'bg-red-500 hover:bg-red-600 text-white'
-                                                : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                                                } px-6 py-4 rounded-full transition shadow`}
-                                            title={isSpeakerOn ? 'Mute Speaker' : 'Unmute Speaker'}
-                                        >
-                                            {isSpeakerOn ? <Volume2 className="w-6 h-6" /> : <VolumeX className="w-6 h-6" />}
-                                        </button>
-
-                                        <button
-                                            onClick={leaveCall}
-                                            className="bg-red-500 hover:bg-red-600 text-white px-8 py-4 rounded-full flex items-center space-x-2 shadow-lg transition"
-                                        >
-                                            <PhoneOff className="w-6 h-6" />
-                                            <span className="font-semibold">Leave Call</span>
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-
-                            {isInCall && (
-                                <div className="flex justify-center space-x-6 text-sm">
-                                    <div className={`flex items-center space-x-2 ${isMuted ? 'text-red-600' : 'text-green-600'}`}>
-                                        {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                                        <span>{isMuted ? 'Muted' : 'Mic Active'}</span>
-                                    </div>
-                                    <div className={`flex items-center space-x-2 ${isVideoEnabled ? 'text-green-600' : 'text-red-600'}`}>
-                                        {isVideoEnabled ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
-                                        <span>{isVideoEnabled ? 'Camera On' : 'Camera Off'}</span>
-                                    </div>
-                                    <div className={`flex items-center space-x-2 ${isSpeakerOn ? 'text-green-600' : 'text-red-600'}`}>
-                                        {isSpeakerOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                                        <span>{isSpeakerOn ? 'Speaker On' : 'Speaker Off'}</span>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* ✅ 修正後的本地視訊預覽 */}
-                    {isInCall && isVideoEnabled && (
-                        <div className="bg-white rounded-lg shadow-sm p-4">
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center">
-                                <Camera className="w-4 h-4 mr-2 text-blue-600" />
-                                Your Camera
-                            </h3>
+                    {/* Control Panel - Floating when video is enabled */}
+                    {isInCall && isVideoEnabled ? (
+                        // Video with floating control panel
+                        <div 
+                            className="bg-white rounded-lg shadow-sm overflow-hidden relative"
+                            onMouseMove={handleDragMove}
+                            onMouseUp={handleDragEnd}
+                            onMouseLeave={handleDragEnd}
+                        >
                             <div className="bg-gray-900 rounded-lg overflow-hidden">
                                 <video
                                     ref={localVideoRef}
@@ -911,12 +840,197 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
                                         console.error('❌ 本地視訊錯誤:', e);
                                     }}
                                 />
-                                <div className="bg-gray-800 px-3 py-2 text-center">
-                                    <div className="font-semibold text-sm text-white flex items-center justify-center">
+                            </div>
+
+                            {/* Floating Control Panel - Draggable */}
+                            <div
+                                ref={controlPanelRef}
+                                onMouseDown={handleDragStart}
+                                style={{
+                                    position: 'fixed',
+                                    top: `${controlPanelPosition.y}px`,
+                                    left: `${controlPanelPosition.x}px`,
+                                    cursor: isDragging ? 'grabbing' : 'grab',
+                                    zIndex: 50,
+                                }}
+                                className="bg-white rounded-lg shadow-lg p-4 w-80"
+                            >
+                                <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center">
+                                    <Camera className="w-4 h-4 mr-2 text-blue-600" />
+                                    Your Camera
+                                </h3>
+
+                                {/* Status Indicators */}
+                                <div className="flex justify-center space-x-6 text-xs mb-4 pb-4 border-b border-gray-200">
+                                    <div className={`flex items-center space-x-1 ${isMuted ? 'text-red-600' : 'text-green-600'}`}>
+                                        {isMuted ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+                                        <span>{isMuted ? 'Muted' : 'Mic On'}</span>
+                                    </div>
+                                    <div className={`flex items-center space-x-1 ${isVideoEnabled ? 'text-green-600' : 'text-red-600'}`}>
+                                        {isVideoEnabled ? <Camera className="w-3 h-3" /> : <CameraOff className="w-3 h-3" />}
+                                        <span>Camera On</span>
+                                    </div>
+                                    <div className={`flex items-center space-x-1 ${isSpeakerOn ? 'text-green-600' : 'text-red-600'}`}>
+                                        {isSpeakerOn ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
+                                        <span>{isSpeakerOn ? 'Speaker On' : 'Off'}</span>
+                                    </div>
+                                </div>
+
+                                {/* Control Buttons */}
+                                <div className="flex justify-center gap-2 flex-wrap">
+                                    <button
+                                        onClick={toggleMute}
+                                        className={`${isMuted
+                                            ? 'bg-red-500 hover:bg-red-600 text-white'
+                                            : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                            } p-2 rounded-full transition shadow`}
+                                        title={isMuted ? 'Unmute' : 'Mute'}
+                                    >
+                                        {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                                    </button>
+
+                                    <button
+                                        onClick={toggleVideo}
+                                        className={`${!isVideoEnabled
+                                            ? 'bg-red-500 hover:bg-red-600 text-white'
+                                            : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                            } p-2 rounded-full transition shadow`}
+                                        title={isVideoEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
+                                    >
+                                        {isVideoEnabled ? <Camera className="w-5 h-5" /> : <CameraOff className="w-5 h-5" />}
+                                    </button>
+
+                                    <button
+                                        onClick={toggleSpeaker}
+                                        className={`${!isSpeakerOn
+                                            ? 'bg-red-500 hover:bg-red-600 text-white'
+                                            : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                            } p-2 rounded-full transition shadow`}
+                                        title={isSpeakerOn ? 'Mute Speaker' : 'Unmute Speaker'}
+                                    >
+                                        {isSpeakerOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                                    </button>
+
+                                    <button
+                                        onClick={leaveCall}
+                                        className="bg-red-500 hover:bg-red-600 text-white p-2 rounded-full shadow transition"
+                                    >
+                                        <PhoneOff className="w-5 h-5" />
+                                    </button>
+                                </div>
+
+                                <div className="text-center">
+                                    <div className="font-semibold text-xs text-gray-600 mt-3 flex items-center justify-center">
                                         <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></span>
                                         {currentUser.name} (You)
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    ) : (
+                        // Static control panel when video is off
+                        <div className="bg-white rounded-lg shadow-sm p-8">
+                            <div className="text-center space-y-6">
+                                <div className="flex justify-center">
+                                    <div
+                                        className={`w-32 h-32 rounded-full flex items-center justify-center ${isInCall ? 'bg-green-500 animate-pulse' : 'bg-gray-200'
+                                            }`}
+                                    >
+                                        <Users
+                                            className={`w-16 h-16 ${isInCall ? 'text-white' : 'text-gray-400'
+                                                }`}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-800">
+                                        {isInCall ? 'Group Call Active' : 'No Active Call'}
+                                    </h2>
+                                    <p className="text-gray-600 mt-2">
+                                        {isInCall
+                                            ? otherParticipants.length === 0
+                                                ? 'You are alone in the call'
+                                                : `${otherParticipants.length} other participant${otherParticipants.length > 1 ? 's' : ''
+                                                } in call`
+                                            : 'Start a group call and discuss the shared incident view together'}
+                                    </p>
+                                </div>
+
+                                <div className="flex justify-center space-x-4">
+                                    {!isInCall ? (
+                                        <button
+                                            onClick={joinCall}
+                                            disabled={connectionStatus === 'connecting'}
+                                            className="bg-green-500 hover:bg-green-600 disabled:bg-green-300 text-white px-8 py-4 rounded-full flex items-center space-x-2 shadow-lg transition"
+                                        >
+                                            <Phone className="w-6 h-6" />
+                                            <span className="font-semibold">
+                                                {connectionStatus === 'connecting' ? 'Connecting...' : 'Join Call'}
+                                            </span>
+                                        </button>
+                                    ) : (
+                                        <>
+                                            <button
+                                                onClick={toggleMute}
+                                                className={`${isMuted
+                                                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                                                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                                    } px-6 py-4 rounded-full transition shadow`}
+                                                title={isMuted ? 'Unmute' : 'Mute'}
+                                            >
+                                                {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                                            </button>
+
+                                            <button
+                                                onClick={toggleVideo}
+                                                className={`${!isVideoEnabled
+                                                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                                                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                                    } px-6 py-4 rounded-full transition shadow`}
+                                                title={isVideoEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
+                                            >
+                                                {isVideoEnabled ? <Camera className="w-6 h-6" /> : <CameraOff className="w-6 h-6" />}
+                                            </button>
+
+                                            <button
+                                                onClick={toggleSpeaker}
+                                                className={`${!isSpeakerOn
+                                                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                                                    : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                                    } px-6 py-4 rounded-full transition shadow`}
+                                                title={isSpeakerOn ? 'Mute Speaker' : 'Unmute Speaker'}
+                                            >
+                                                {isSpeakerOn ? <Volume2 className="w-6 h-6" /> : <VolumeX className="w-6 h-6" />}
+                                            </button>
+
+                                            <button
+                                                onClick={leaveCall}
+                                                className="bg-red-500 hover:bg-red-600 text-white px-8 py-4 rounded-full flex items-center space-x-2 shadow-lg transition"
+                                            >
+                                                <PhoneOff className="w-6 h-6" />
+                                                <span className="font-semibold">Leave Call</span>
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+
+                                {isInCall && (
+                                    <div className="flex justify-center space-x-6 text-sm">
+                                        <div className={`flex items-center space-x-2 ${isMuted ? 'text-red-600' : 'text-green-600'}`}>
+                                            {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                                            <span>{isMuted ? 'Muted' : 'Mic Active'}</span>
+                                        </div>
+                                        <div className={`flex items-center space-x-2 ${isVideoEnabled ? 'text-green-600' : 'text-red-600'}`}>
+                                            {isVideoEnabled ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
+                                            <span>{isVideoEnabled ? 'Camera On' : 'Camera Off'}</span>
+                                        </div>
+                                        <div className={`flex items-center space-x-2 ${isSpeakerOn ? 'text-green-600' : 'text-red-600'}`}>
+                                            {isSpeakerOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                                            <span>{isSpeakerOn ? 'Speaker On' : 'Speaker Off'}</span>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
