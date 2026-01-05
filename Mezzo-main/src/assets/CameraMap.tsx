@@ -3,25 +3,8 @@ import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
 import * as L from 'leaflet';
 import Hls from 'hls.js';
 import 'leaflet/dist/leaflet.css';
-
-// 定義設備類型
-interface Device {
-  id: string;
-  type: string;
-  position: {
-    lat: number;
-    lng: number;
-    alt?: number;
-  };
-  callsign?: string;
-  status?: string;
-  battery?: number;
-  signal?: number;
-  priority?: number;
-  streamUrl?: string;  // RTSP/HLS 串流 URL
-  rtspUrl?: string;    // 原始 RTSP URL
-  lastUpdate: string;
-}
+import { CameraMapProps, Device } from '../types';
+import { getFullStreamUrl } from '../config/api';
 
 // 驗證設備數據是否有效
 const isValidDevice = (device: any): device is Device => {
@@ -35,7 +18,6 @@ const isValidDevice = (device: any): device is Device => {
     !isNaN(device.position.lng)
   );
 };
-
 // 建立不同類型的圖示
 const createIcon = (type: string, color: string = 'blue', priority?: number) => {
   const priorityBadge = priority ? `<div style="position: absolute; top: -5px; right: -5px; background: red; color: white; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">P${priority}</div>` : '';
@@ -166,7 +148,7 @@ const VideoPlayer = ({ streamUrl, cameraId }: { streamUrl: string; cameraId: str
   );
 };
 
-const CameraMap = () => {
+const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [showVideo, setShowVideo] = useState(false);
@@ -190,7 +172,7 @@ const CameraMap = () => {
         setWsStatus('connecting');
         console.log('🔌 嘗試連接 WebSocket...');
 
-        websocket = new WebSocket('ws://localhost:4005');
+        websocket = new WebSocket('ws://localhost:4001');
 
         websocket.onopen = () => {
           if (!isMounted) return;  // ← 檢查
@@ -391,7 +373,7 @@ const CameraMap = () => {
         </div>
       </div>
 
-      {/* Video Player Overlay */}
+      {/* 在地圖 Popup 中 */}
       {showVideo && selectedDeviceData?.streamUrl && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full">
@@ -411,8 +393,8 @@ const CameraMap = () => {
             </div>
             <div className="p-4">
               <VideoPlayer
-                streamUrl={selectedDeviceData.streamUrl}
-                cameraId={selectedDeviceData.id}
+                streamUrl={getFullStreamUrl(selectedDeviceData?.streamUrl || '')}
+                cameraId={selectedDeviceData?.id || ''}
               />
             </div>
           </div>
@@ -448,7 +430,9 @@ const CameraMap = () => {
                   eventHandlers={{
                     click: () => {
                       setSelectedDevice(device.id);
-                      if (device.streamUrl) {
+                      if (onDeviceSelect) {
+                        onDeviceSelect(device);
+                      } else if (device.streamUrl) {
                         setShowVideo(true);
                       }
                     }
@@ -517,7 +501,11 @@ const CameraMap = () => {
                 style={{ borderLeftColor: getPriorityColor(device.priority || 3), borderLeftWidth: '4px' }}
                 onClick={() => {
                   setSelectedDevice(device.id);
-                  if (device.streamUrl) setShowVideo(true);
+                  if (onDeviceSelect) {
+                    onDeviceSelect(device);
+                  } else if (device.streamUrl) {
+                    setShowVideo(true);
+                  }
                 }}
               >
                 <div className="flex justify-between items-start">
@@ -614,5 +602,4 @@ const CameraMap = () => {
     </>
   );
 };
-
 export default CameraMap;
