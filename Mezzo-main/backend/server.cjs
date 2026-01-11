@@ -16,12 +16,14 @@ const WS_PORT = 4001;
 // ==================== 配置 ====================
 
 // 公開訪問 URL（用於 ATAK 手機訪問影片）
-const PUBLIC_URL = `http://localhost:${HTTP_PORT}`;
+const SERVER_URL = '172.20.10.2'; //更改為自己ip位置
+const PUBLIC_URL = `http://${SERVER_URL}:${HTTP_PORT}`;
+
 
 // TAK Server 配置
 const TAK_CONFIG = {
   enabled: true,
-  host: '137.184.101.250',        // FTS Official Public Server
+  host: SERVER_URL,        // FTS Official Public Server
   port: 8087,
   useTLS: false,
   description: 'FTS Official Public Server',
@@ -203,9 +205,20 @@ class TAKClient {
 
   sendRaw(message) {
     try {
-      this.socket.write(message + '\n');
+      // 📝 舊寫法: this.socket.write(message + '\n');
+      
+      // 🛡️ 保險寫法: 強制轉成 UTF-8 Buffer 再發送
+      // 這樣就算沒寫 XML header，資料流本身也保證是 UTF-8
+      const buffer = Buffer.from(message + '\n', 'utf8');
+      this.socket.write(buffer);
+
       if (!message.includes('<ping')) {
         console.log('📤 Sent to TAK Server');
+        // 把送出的 XML 印出來
+        console.log('------------------------------------------------');
+        console.log('📤 [DEBUG] 正要發送的 XML:');
+        console.log(message);
+        console.log('------------------------------------------------');
       }
       return true;
     } catch (error) {
@@ -1077,8 +1090,8 @@ function generateCotXml(data) {
   const now = new Date();
   const stale = new Date(now.getTime() + 300000);
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<event version="2.0" uid="${data.uid}" type="${data.type || 'a-f-G-U-C'}" how="h-e" time="${now.toISOString()}" start="${now.toISOString()}" stale="${stale.toISOString()}">
+  // 同樣移除 <?xml?> 標頭 
+  return `<event version="2.0" uid="${data.uid}" type="${data.type || 'a-f-G-U-C'}" how="h-e" time="${now.toISOString()}" start="${now.toISOString()}" stale="${stale.toISOString()}">
   <point lat="${data.lat}" lon="${data.lon}" hae="${data.hae || 0}" ce="9999999.0" le="9999999.0"/>
   <detail>
     <contact callsign="${data.callsign || 'Unknown'}"/>
@@ -1089,28 +1102,38 @@ function generateCotXml(data) {
 
 function generateDeviceCoT(device) {
   const now = new Date();
-  const stale = new Date(now.getTime() + 300000);
+  
+  // 1. 時間策略：倒退 5 分鐘，避免時間誤差導致被丟棄
+  const pastTime = new Date(now.getTime() - 5 * 60 * 1000); 
+  const staleTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-  const videoTag = device.streamUrl
-    ? `<__video url="${PUBLIC_URL}${device.streamUrl}"/>`
-    : '';
+  // 2. 處理 URL：必須將 localhost 替換成真實 IP，否則 WinTAK 播不了
+  // 假設你的 HTTP_PORT 是 4000
+  const port = '4000';
+  const baseUrl = `http://${SERVER_URL}:${port}`;
 
-  const groupTag = device.group && device.group !== '未分組'
-    ? `<__group name="${device.group}"${device.role ? ` role="${device.role}"` : ''}/>`
-    : '';
+  let videoTag = '';
+  if (device.streamUrl) {
+      let cleanPath = device.streamUrl;
+      // 強制替換 localhost 為 IP
+      if (cleanPath.startsWith('http')) {
+        cleanPath = cleanPath.replace('localhost', serverIp).replace('127.0.0.1', serverIp);
+      } else {
+        cleanPath = baseUrl + cleanPath;
+      }
+      cleanPath = cleanPath.replace(/&/g, '&amp;');
+      videoTag = `<__video url="${cleanPath}"/>`;
+  }
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<event version="2.0" uid="${device.id}" type="b-m-p-s-p-loc" how="m-g" time="${now.toISOString()}" start="${now.toISOString()}" stale="${stale.toISOString()}">
-  <point lat="${device.position.lat}" lon="${device.position.lng}" hae="${device.position.alt || 0}" ce="10.0" le="10.0"/>
-  <detail>
-    <contact callsign="${device.callsign || device.id}"/>
-    ${videoTag}
-    ${groupTag}
-    <remarks>${device.type} - Priority ${device.priority || 3}</remarks>
-    <priority>${device.priority || 3}</priority>
-    <status>${device.status || 'unknown'}</status>
-  </detail>
-</event>`;
+  let groupTag = '';
+  if (device.group && device.group !== '未分組') {
+      groupTag = `<__group name="${device.group}"${device.role ? ` role="${device.role}"` : ''}/>`;
+  }
+
+  const callsign = device.callsign || device.id;
+
+  // 🚀 強制壓縮成單行，不留任何換行符號
+  return `<event version="2.0" uid="${device.id}" type="a-f-G-U-C" how="m-g" time="${now.toISOString()}" start="${pastTime.toISOString()}" stale="${staleTime.toISOString()}"><point lat="${device.position.lat}" lon="${device.position.lng}" hae="${device.position.alt || 0}" ce="10.0" le="10.0"/><detail><contact callsign="${callsign}"/>${videoTag}${groupTag}<remarks>Mezzo Cam</remarks><priority>3</priority><status>active</status></detail></event>`;
 }
 
 // ==================== Express 中介軟體 ====================
@@ -1232,11 +1255,33 @@ app.post('/api/rtsp/register', (req, res) => {
     connectedDevices.set(streamId, device);
     updateGroupIndex(streamId, device.group);
 
-    if (takClient && TAK_CONFIG.enabled) {
-      const cotXml = generateDeviceCoT(device);
-      takClient.sendCoT(cotXml);
-      console.log(`📤 Sent camera CoT to TAK Server: ${streamId}`);
+    // if (takClient && TAK_CONFIG.enabled) {
+    //   const cotXml = generateDeviceCoT(device);
+    //   takClient.sendCoT(cotXml);
+    //   console.log(`📤 Sent camera CoT to TAK Server: ${streamId}`);
+    // }
+
+// 👇👇👇 關鍵修改：暴力發送模式 (跟 debug_sender.js 一樣) 👇👇👇
+    if (TAK_CONFIG.enabled) {
+        const xmlPayload = generateDeviceCoT(device);
+        
+        console.log(`🚀 [暴力模式] 為 ${streamId} 建立獨立連線...`);
+        
+        const tempSocket = new net.Socket();
+        
+        // ⚠️ 直接連線到 FTS IP，不透過 TAKClient 類別
+        tempSocket.connect(8087, '172.20.10.2', () => {
+            console.log('✅ [暴力模式] 連線成功，發送 XML...');
+            tempSocket.write(xmlPayload + '\n'); // 寫入資料
+            tempSocket.end(); // 發送完馬上斷線
+            console.log('🏁 [暴力模式] 發送完畢，已斷線');
+        });
+
+        tempSocket.on('error', (err) => {
+            console.error('❌ [暴力模式] 失敗:', err.message);
+        });
     }
+    // 👆👆👆 修改結束 👆👆👆
 
     broadcastToClients({
       type: 'device_added',
@@ -1475,6 +1520,80 @@ app.get('/api/tak/status', (req, res) => {
     res.json({ enabled: false });
   }
 });
+
+// ==================== 💓 自動心跳機制 (Auto Heartbeat) ====================
+// 每 10 秒鐘，把所有已註冊的設備重新發送一次給 TAK Server
+// 這能確保：
+// 1. 如果第一次註冊遺失，第二次會補上
+// 2. 設備永遠保持「在線」狀態
+setInterval(() => {
+  if (!takClient || !takClient.connected) return;
+
+  const devices = getValidDevices();
+  if (devices.length > 0) {
+    console.log(`💓 Sending heartbeat for ${devices.length} devices...`);
+    devices.forEach(device => {
+      // 確保它是活躍狀態才發送
+      if (device.status === 'active') {
+        const xml = generateDeviceCoT(device);
+        takClient.sendCoT(xml);
+      }
+    });
+  }
+}, 10000); // 10秒一次
+
+// // ==================== 🛠️ 除錯用：假資料產生器 ====================
+// // 如果前端沒顯示東西，把這段加進去，確保前端能畫出東西
+// setInterval(() => {
+//   // 模擬一個在台北 101 附近繞圈圈的友軍
+//   const time = Date.now() / 1000;
+//   const centerLat = 25.033964;
+//   const centerLon = 121.564472;
+//   const radius = 0.005; // 約 500公尺半徑
+
+//   const fakeDevice = {
+//     id: 'SIMULATED-FRIENDLY-01',
+//     type: 'friendly', // 這裡對應前端的圖示邏輯
+//     callsign: '測試友軍(Alpha)',
+//     group: 'Alpha小隊',
+//     status: 'active',
+//     battery: 85,
+//     source: 'simulation',
+//     lastUpdate: new Date().toISOString(),
+//     position: {
+//       lat: centerLat + Math.cos(time) * radius,
+//       lng: centerLon + Math.sin(time) * radius,
+//       alt: 100
+//     }
+//   };
+
+//   // 1. 存入後端記憶體
+//   connectedDevices.set(fakeDevice.id, fakeDevice);
+//   updateGroupIndex(fakeDevice.id, fakeDevice.group);
+
+//   // 2. 廣播給前端
+//   broadcastToClients({
+//     type: 'device_update',
+//     device: fakeDevice
+//   });
+
+//   // ========== 👇 關鍵修改在這裡 👇 ==========
+//   // 3. 發送給 TAK Server (讓 WinTAK 看得到)
+//   if (takClient && takClient.connected) {
+//       // 使用你程式碼裡現有的函數轉成 XML
+//       const xml = generateDeviceCoT(fakeDevice); 
+//       takClient.sendCoT(xml);
+//       console.log(`📤 模擬訊號已發送至 WinTAK: ${fakeDevice.callsign}`);
+//   } else {
+//       console.log('⚠️ TAK Server 未連線，無法發送模擬訊號');
+//   }
+//   // =======================================
+
+//   // 每 3 秒更新一次位置
+// }, 3000);
+
+// console.log('🛠️ Simulation Mode: Active (Generating fake friendly unit)');
+// // ============================================================
 
 // ==================== 啟動服務器 ====================
 

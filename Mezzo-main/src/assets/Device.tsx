@@ -200,6 +200,12 @@ const Device = () => {
     try {
       if (formData.streamType === 'rtsp') {
         // 註冊 RTSP 攝像頭
+        // ==========================================
+        // 情況 A: RTSP 攝像頭 (交給後端處理)
+        // ==========================================
+        
+        // 1. 呼叫後端註冊 API
+        // 後端會自動產生 CoT 並帶有 <__video> 標籤發送給 WinTAK
         const response = await fetch('http://localhost:4000/api/rtsp/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -213,6 +219,8 @@ const Device = () => {
             },
             priority: parseInt(formData.priority),
             callsign: formData.callsign || formData.streamId,
+            // 可以在這裡帶入 group 參數
+            group: 'Cameras' 
           }),
         });
 
@@ -221,23 +229,32 @@ const Device = () => {
           throw new Error(errorData.error || '註冊失敗');
         }
 
+        // ⚠️ 修正：這裡 "不要" 再手動呼叫 /send-cot
+        // 因為後端已經送出過一次 "完美的" CoT (包含影片連結)
+        // 如果這裡再送一次，會把原本的影片連結覆蓋掉
+
         setRegisterMessage({
           type: 'success',
-          text: '✅ RTSP 攝像頭註冊成功！正在啟動串流...',
+          text: '✅ RTSP 攝像頭註冊成功！WinTAK 應已出現攝影機圖示。',
         });
+
       } else {
-        // 註冊 MJPEG 攝像頭（發送 CoT）
+        // ==========================================
+        // 情況 B: MJPEG 或其他類型 (前端手動發送)
+        // ==========================================
         const response = await fetch('http://localhost:4000/send-cot', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             uid: formData.streamId,
-            type: 'b-m-p-s-p-loc',
+            // 建議改用 b-m-p-s-p-loc (感測器/攝影機) 而不是 a-f-G (友軍)
+            type: 'b-m-p-s-p-loc', 
             lat: parseFloat(formData.lat),
             lon: parseFloat(formData.lon),
             hae: parseFloat(formData.alt),
             callsign: formData.callsign || formData.streamId,
-            remarks: `MJPEG: ${formData.rtspUrl}`,
+            // 將 MJPEG 網址放入 remarks，方便在 WinTAK 查看
+            remarks: `MJPEG Stream: ${formData.rtspUrl}`,
           }),
         });
 
@@ -248,7 +265,7 @@ const Device = () => {
 
         setRegisterMessage({
           type: 'success',
-          text: '✅ MJPEG 攝像頭註冊成功！',
+          text: '✅ MJPEG 設備已發送訊號至 WinTAK！',
         });
       }
 
@@ -264,12 +281,13 @@ const Device = () => {
         priority: '3',
       });
 
-      // 3 秒後清除訊息並重新載入設備列表
+      // 3 秒後清除訊息並重新載入列表
       setTimeout(() => {
         setRegisterMessage(null);
         setShowRegisterForm(false);
-        fetchGPSDevices();
+        fetchGPSDevices(); // 重新抓取列表以更新 UI
       }, 3000);
+
     } catch (error) {
       console.error('註冊錯誤:', error);
       setRegisterMessage({
