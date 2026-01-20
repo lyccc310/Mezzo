@@ -12,27 +12,24 @@ const net = require('net');
 const app = express();
 const HTTP_PORT = 4000;
 const WS_PORT = 4001;
+const HOST = '0.0.0.0';
 
 // ==================== 配置 ====================
 
-// 公開訪問 URL（用於 ATAK 手機訪問影片）
-const SERVER_URL = '172.20.10.2'; //更改為自己ip位置
+const SERVER_URL = '192.168.254.1';
 const PUBLIC_URL = `http://${SERVER_URL}:${HTTP_PORT}`;
-
 
 // TAK Server 配置
 const TAK_CONFIG = {
-  enabled: true,
-  host: SERVER_URL,        // FTS Official Public Server
+  enabled: false,  // ← 暫時關閉 WinTAK
+  host: SERVER_URL,
   port: 8087,
   useTLS: false,
-  description: 'FTS Official Public Server',
-  software: 'freetakserver',
   reconnectInterval: 5000,
   heartbeatInterval: 30000
 };
 
-// MQTT 配置
+// MQTT 配置 - 你們原有的
 const MQTT_CONFIG = {
   broker: 'mqtt://test.mosquitto.org:1883',
   topics: {
@@ -42,13 +39,26 @@ const MQTT_CONFIG = {
     COT_MESSAGE: 'myapp/cot/message',
     DEVICE_STATUS: 'myapp/device/+/status',
     STREAM_CONTROL: 'myapp/stream/control',
-    // ===== 訊息主題 =====
     MESSAGE_BROADCAST: 'myapp/messages/broadcast',
     MESSAGE_GROUP: 'myapp/messages/group/+',
     MESSAGE_DEVICE: 'myapp/messages/device/+'
   },
   options: {
     clientId: `mezzo-server-${Date.now()}`,
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 30000
+  }
+};
+
+// ===== 新增：PTT MQTT 配置 =====
+const PTT_MQTT_CONFIG = {
+  broker: 'mqtt://118.163.141.80:1883',  // PTT 系統的 Broker
+  topics: {
+    ALL: '/WJI/PTT/#'  // 訂閱所有 PTT 主題
+  },
+  options: {
+    clientId: `mezzo-ptt-bridge-${Date.now()}`,
     clean: true,
     reconnectPeriod: 5000,
     connectTimeout: 30000
@@ -68,18 +78,16 @@ const STREAM_CONFIG = {
     hlsFlags: 'delete_segments+append_list'
   },
   maxStreams: 10,
-  streamTimeout: 300000  // 5 分鐘無活動自動停止
+  streamTimeout: 300000
 };
-
 // ==================== 儲存 ====================
-
 const connectedDevices = new Map();
 const cotMessages = [];
 const rtspStreams = new Map();
 const rtspProcesses = new Map();
 const streamActivity = new Map();
-const messages = [];  // 訊息歷史記錄
-const deviceGroups = new Map();  // 群組管理: groupName -> Set(deviceIds)
+const messages = [];
+const deviceGroups = new Map();
 const streamsPath = path.resolve(__dirname, 'streams');
 // 確保 streams 目錄存在
 if (STREAM_CONFIG.enabled && !fs.existsSync(STREAM_CONFIG.outputDir)) {
@@ -87,6 +95,18 @@ if (STREAM_CONFIG.enabled && !fs.existsSync(STREAM_CONFIG.outputDir)) {
   console.log('📁 Created streams directory:', STREAM_CONFIG.outputDir);
 }
 
+// ===== 新增：PTT 狀態管理 =====
+const pttState = {
+  activeUsers: new Map(),      // 活躍的 PTT 使用者
+  sosAlerts: new Map(),        // SOS 警報
+  channelUsers: new Map()      // 各頻道的使用者
+};
+
+// 確保 streams 目錄存在
+if (STREAM_CONFIG.enabled && !fs.existsSync(STREAM_CONFIG.outputDir)) {
+  fs.mkdirSync(STREAM_CONFIG.outputDir, { recursive: true });
+  console.log('📁 Created streams directory:', STREAM_CONFIG.outputDir);
+}
 // ==================== TAK Client（支援 SSL）====================
 
 class TAKClient {
@@ -394,7 +414,6 @@ if (TAK_CONFIG.enabled) {
 // ==================== 群組管理函數 ====================
 
 function updateGroupIndex(deviceId, groupName) {
-  // 移除設備從所有舊群組
   deviceGroups.forEach((members, group) => {
     members.delete(deviceId);
     if (members.size === 0) {
@@ -402,7 +421,6 @@ function updateGroupIndex(deviceId, groupName) {
     }
   });
 
-  // 添加到新群組
   if (!deviceGroups.has(groupName)) {
     deviceGroups.set(groupName, new Set());
   }
@@ -422,6 +440,280 @@ function getDeviceGroup(deviceId) {
   return device?.group || '未分組';
 }
 
+// ==================== PTT 資料解析函數 ====================
+
+/**
+ * 解析 PTT MQTT 訊息格式
+ * 格式：[Tag (32 bytes)][UUID (128 bytes)][Data (Variable)]
+ */
+function parsePTTMessage(buffer) {
+  try {
+    // 確保 buffer 至少有 160 bytes (32 + 128)
+    if (buffer.length < 160) {
+      console.warn('⚠️ PTT message too short:', buffer.length);
+      return null;
+    }
+
+    // 解析 Tag (前 32 bytes)
+    const tag = buffer.slice(0, 32).toString('utf8').trim().replace(/\0/g, '');
+
+    // 解析 UUID (接下來 128 bytes)
+    const uuid = buffer.slice(32, 160).toString('utf8').trim().replace(/\0/g, '');
+
+    // 解析 Data (剩餘部分)
+    const data = buffer.slice(160).toString('utf8').trim();
+
+    return { tag, uuid, data };
+  } catch (error) {
+    console.error('❌ PTT message parse error:', error);
+    return null;
+  }
+}
+
+/**
+ * 處理 PTT GPS 訊息
+ */
+function handlePTT_GPS(channel, uuid, data) {
+  try {
+    console.log('📍 [PTT GPS]', { channel, uuid, data });
+
+    // 解析 GPS 資料：格式 "UUID,Lat,Lon" 或 "Lat,Lon"
+    const parts = data.split(',');
+    let lat, lon;
+
+    if (parts.length >= 3) {
+      // 格式：UUID,Lat,Lon
+      lat = parseFloat(parts[1]);
+      lon = parseFloat(parts[2]);
+    } else if (parts.length >= 2) {
+      // 格式：Lat,Lon
+      lat = parseFloat(parts[0]);
+      lon = parseFloat(parts[1]);
+    } else {
+      console.warn('⚠️ Invalid GPS data format:', data);
+      return;
+    }
+
+    if (isNaN(lat) || isNaN(lon)) {
+      console.warn('⚠️ Invalid GPS coordinates:', { lat, lon });
+      return;
+    }
+
+    // 建立設備物件
+    const device = {
+      id: uuid,
+      type: 'ptt_user',
+      position: { lat, lng: lon, alt: 0 },
+      callsign: uuid.substring(0, 20),  // 取前 20 個字元作為 callsign
+      group: channel || 'PTT',
+      status: 'active',
+      source: 'ptt_gps',
+      priority: 3,
+      lastUpdate: new Date().toISOString()
+    };
+
+    // 存入記憶體
+    connectedDevices.set(uuid, device);
+    updateGroupIndex(uuid, device.group);
+    pttState.activeUsers.set(uuid, { lastSeen: Date.now(), channel });
+
+    console.log(`✅ PTT GPS updated: ${uuid} at ${lat}, ${lon}`);
+
+    // 廣播到前端
+    broadcastToClients({
+      type: 'device_update',
+      device: device
+    });
+
+  } catch (error) {
+    console.error('❌ PTT GPS handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT SOS 訊息
+ */
+function handlePTT_SOS(channel, uuid, data) {
+  try {
+    console.log('🆘 [PTT SOS]', { channel, uuid, data });
+
+    // 解析 SOS 資料：格式 "Lat,Lon"
+    const parts = data.split(',');
+    if (parts.length < 2) {
+      console.warn('⚠️ Invalid SOS data format:', data);
+      return;
+    }
+
+    const lat = parseFloat(parts[0]);
+    const lon = parseFloat(parts[1]);
+
+    if (isNaN(lat) || isNaN(lon)) {
+      console.warn('⚠️ Invalid SOS coordinates:', { lat, lon });
+      return;
+    }
+
+    // 建立 SOS 事件
+    const sosEvent = {
+      id: `SOS-${uuid}-${Date.now()}`,
+      type: 'sos',
+      deviceId: uuid,
+      position: { lat, lng: lon, alt: 0 },
+      callsign: uuid.substring(0, 20),
+      group: channel || 'PTT',
+      timestamp: new Date().toISOString(),
+      priority: 1,  // 最高優先級
+      status: 'active',
+      source: 'ptt_sos'
+    };
+
+    // 存入 SOS 警報列表
+    pttState.sosAlerts.set(sosEvent.id, sosEvent);
+
+    // 同時也作為設備更新
+    connectedDevices.set(uuid, {
+      ...sosEvent,
+      id: uuid
+    });
+    updateGroupIndex(uuid, sosEvent.group);
+
+    console.log(`🆘 SOS Alert from ${uuid} at ${lat}, ${lon}`);
+
+    // 廣播 SOS 警報
+    broadcastToClients({
+      type: 'sos_alert',
+      event: sosEvent
+    });
+
+    // 也廣播設備更新
+    broadcastToClients({
+      type: 'device_update',
+      device: sosEvent
+    });
+
+  } catch (error) {
+    console.error('❌ PTT SOS handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT 廣播訊息
+ */
+function handlePTT_Broadcast(channel, uuid, tag, data) {
+  try {
+    console.log('📢 [PTT Broadcast]', { channel, uuid, tag, data });
+
+    // 建立訊息物件 - 廣播發送到所有頻道
+    const message = {
+      id: `ptt-msg-${Date.now()}`,
+      from: uuid,
+      to: 'all',  // 廣播到所有頻道
+      text: data || `PTT ${tag}`,
+      priority: 3,
+      timestamp: new Date().toISOString(),
+      source: 'ptt_broadcast',
+      channel: channel  // 保留來源頻道資訊
+    };
+
+    // 存入訊息歷史
+    messages.push(message);
+    if (messages.length > 100) {
+      messages.shift();
+    }
+
+    console.log(`📢 PTT Broadcast: ${uuid} → ALL (from ${channel})`);
+
+    // 只廣播一次，使用 ptt_broadcast 類型
+    broadcastToClients({
+      type: 'ptt_broadcast',
+      message: message
+    });
+
+  } catch (error) {
+    console.error('❌ PTT Broadcast handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT 文字訊息 (TEXT_MESSAGE)
+ */
+function handlePTT_TextMessage(channel, uuid, data) {
+  try {
+    console.log('💬 [PTT Text Message]', { channel, uuid, data });
+
+    // 建立訊息物件
+    const message = {
+      id: `ptt-text-${Date.now()}`,
+      from: uuid,
+      to: `group:${channel || 'PTT'}`,
+      text: data,
+      priority: 3,
+      timestamp: new Date().toISOString(),
+      source: 'ptt_text'
+    };
+
+    // 存入訊息歷史
+    messages.push(message);
+    if (messages.length > 100) {
+      messages.shift();
+    }
+
+    console.log(`💬 PTT Text Message: ${uuid} → ${channel}: ${data}`);
+
+    // 只廣播一次，使用 ptt_broadcast 類型
+    broadcastToClients({
+      type: 'ptt_broadcast',
+      message: message
+    });
+
+  } catch (error) {
+    console.error('❌ PTT Text Message handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT MARK (標記) 訊息
+ */
+function handlePTT_MARK(channel, uuid, tag, data) {
+  try {
+    console.log('📹 [PTT MARK]', { channel, uuid, tag, data });
+
+    const isStart = tag.includes('START');
+    const action = isStart ? '開始錄影' : '停止錄影';
+
+    // 更新設備狀態
+    const device = connectedDevices.get(uuid);
+    if (device) {
+      device.recording = isStart;
+      device.lastUpdate = new Date().toISOString();
+      connectedDevices.set(uuid, device);
+
+      broadcastToClients({
+        type: 'device_update',
+        device: device
+      });
+    }
+
+    // 建立標記事件
+    const markEvent = {
+      id: `mark-${uuid}-${Date.now()}`,
+      deviceId: uuid,
+      action: isStart ? 'start' : 'stop',
+      timestamp: new Date().toISOString(),
+      channel: channel
+    };
+
+    console.log(`📹 MARK ${action}: ${uuid}`);
+
+    // 廣播標記事件
+    broadcastToClients({
+      type: 'ptt_mark',
+      event: markEvent
+    });
+
+  } catch (error) {
+    console.error('❌ PTT MARK handler error:', error);
+  }
+}
 // ==================== RTSP 串流管理器 ====================
 
 class StreamManager {
@@ -432,7 +724,7 @@ class StreamManager {
     this.activity = streamActivity;
   }
 
-  startStream(streamId, rtspUrl, options = {}) {
+  startStream(streamId, streamUrl, options = {}) {
     if (this.processes.size >= this.config.maxStreams) {
       throw new Error(`Maximum streams limit reached (${this.config.maxStreams})`);
     }
@@ -442,22 +734,58 @@ class StreamManager {
     const outputPath = path.join(this.config.outputDir, `${streamId}.m3u8`);
     const segmentPath = path.join(this.config.outputDir, `${streamId}_%03d.ts`);
 
+    // 判斷串流類型
+    const isRTSP = streamUrl.startsWith('rtsp://');
+    const isHTTP = streamUrl.startsWith('http://') || streamUrl.startsWith('https://');
+
     console.log(`🎥 Starting stream: ${streamId}`);
-    console.log(`   RTSP: ${rtspUrl}`);
+    console.log(`   Source: ${streamUrl}`);
+    console.log(`   Type: ${isRTSP ? 'RTSP' : isHTTP ? 'HTTP/MJPEG' : 'Unknown'}`);
     console.log(`   HLS:  /streams/${streamId}.m3u8`);
 
-    const ffmpegArgs = [
-      '-rtsp_transport', 'tcp',
-      '-i', rtspUrl,
-      '-c:v', 'copy',
-      '-c:a', 'aac',
-      '-f', 'hls',
-      '-hls_time', '2',
-      '-hls_list_size', '5',
-      '-hls_flags', 'delete_segments+append_list',
-      '-hls_segment_filename', segmentPath,
-      outputPath
-    ];
+    let ffmpegArgs = [];
+
+    if (isRTSP) {
+      // RTSP 串流配置
+      ffmpegArgs = [
+        '-rtsp_transport', 'tcp',
+        '-timeout', '5000000',  // 5秒超時
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', streamUrl,
+        '-c:v', 'libx264',  // 重新編碼以確保相容性
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-f', 'hls',
+        '-hls_time', '2',
+        '-hls_list_size', '5',
+        '-hls_flags', 'delete_segments+append_list',
+        '-hls_segment_filename', segmentPath,
+        outputPath
+      ];
+    } else if (isHTTP) {
+      // HTTP/MJPEG 串流配置
+      ffmpegArgs = [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', streamUrl,
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-f', 'hls',
+        '-hls_time', '2',
+        '-hls_list_size', '5',
+        '-hls_flags', 'delete_segments+append_list',
+        '-hls_segment_filename', segmentPath,
+        outputPath
+      ];
+    } else {
+      throw new Error(`Unsupported stream URL format: ${streamUrl}`);
+    }
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
@@ -485,7 +813,8 @@ class StreamManager {
     const streamInfo = {
       streamId: streamId,
       hlsUrl: `/streams/${streamId}.m3u8`,
-      rtspUrl: rtspUrl,
+      streamUrl: streamUrl,  // 統一使用 streamUrl
+      rtspUrl: streamUrl,    // 保持向後相容
       status: 'active',
       startTime: new Date().toISOString(),
       ...options
@@ -564,10 +893,12 @@ if (STREAM_CONFIG.enabled) {
 
 // ==================== MQTT 客戶端 ====================
 
+// ==================== MQTT 客戶端 (你們原有的) ====================
+
 const mqttClient = mqtt.connect(MQTT_CONFIG.broker, MQTT_CONFIG.options);
 
 mqttClient.on('connect', () => {
-  console.log('✅ Connected to MQTT Broker');
+  console.log('✅ Connected to MQTT Broker (Mezzo)');
 
   Object.values(MQTT_CONFIG.topics).forEach(topic => {
     mqttClient.subscribe(topic, (err) => {
@@ -594,9 +925,7 @@ mqttClient.on('message', (topic, message) => {
     } else if (topic.includes('device/')) {
       const deviceId = topic.split('/')[2];
       handleDeviceStatus(deviceId, messageStr);
-    }
-    // ===== 處理訊息 =====
-    else if (topic.includes('messages/')) {
+    } else if (topic.includes('messages/')) {
       handleIncomingMessage(messageStr, topic);
     }
 
@@ -615,28 +944,150 @@ mqttClient.on('error', (error) => {
   console.error('❌ MQTT Error:', error.message);
 });
 
-mqttClient.on('reconnect', () => {
-  console.log('🔄 MQTT reconnecting...');
+// ==================== PTT MQTT 客戶端 (新增) ====================
+
+const pttMqttClient = mqtt.connect(PTT_MQTT_CONFIG.broker, PTT_MQTT_CONFIG.options);
+
+pttMqttClient.on('connect', () => {
+  console.log('✅ Connected to PTT MQTT Broker');
+
+  // 訂閱所有 PTT 主題
+  pttMqttClient.subscribe(PTT_MQTT_CONFIG.topics.ALL, (err) => {
+    if (!err) {
+      console.log(`📡 Subscribed to PTT: ${PTT_MQTT_CONFIG.topics.ALL}`);
+    } else {
+      console.error(`❌ PTT Subscribe failed:`, err);
+    }
+  });
 });
 
-mqttClient.on('offline', () => {
-  console.warn('⚠️  MQTT offline');
+pttMqttClient.on('message', (topic, message) => {
+  try {
+    console.log(`📨 PTT MQTT [${topic}]:`, message.length, 'bytes');
+
+    // ===== 按照主管指示：拆解 Topic =====
+    const InTopic = topic.toString().split('/');
+    // InTopic = ['', 'WJI', 'PTT', '{Channel}', '{Function}', ...]
+    // 例如：/WJI/PTT/channel1/GPS
+    // InTopic[0] = ''
+    // InTopic[1] = 'WJI'
+    // InTopic[2] = 'PTT'
+    // InTopic[3] = 'channel1'
+    // InTopic[4] = 'GPS'
+
+    if (InTopic.length < 5) {
+      console.warn('⚠️ Invalid PTT topic format:', topic);
+      return;
+    }
+
+    const channel = InTopic[3];    // 頻道名稱
+    const function_ = InTopic[4];  // 功能類型
+
+    console.log(`📡 PTT Message: Channel=${channel}, Function=${function_}`);
+
+    // 解析 PTT 二進位格式
+    const parsed = parsePTTMessage(message);
+    if (!parsed) {
+      console.warn('⚠️ Failed to parse PTT message');
+      return;
+    }
+
+    const { tag, uuid, data } = parsed;
+    console.log(`   Tag: ${tag}`);
+    console.log(`   UUID: ${uuid}`);
+    console.log(`   Data: ${data}`);
+
+    // ===== 根據功能類型分類處理 =====
+    switch (function_) {
+      case 'GPS':
+        handlePTT_GPS(channel, uuid, data);
+        break;
+
+      case 'SOS':
+        handlePTT_SOS(channel, uuid, data);
+        break;
+
+      case 'CHANNEL_ANNOUNCE':
+        // 根據 Tag 區分不同類型的廣播
+        if (tag === 'TEXT_MESSAGE') {
+          handlePTT_TextMessage(channel, uuid, data);
+        } else if (tag === 'BROADCAST') {
+          handlePTT_Broadcast(channel, uuid, tag, data);
+        } else if (tag.includes('PTT_MSG_TYPE_SPEECH')) {
+          console.log('🎙️ [PTT SPEECH CONTROL]', tag);
+          // TODO: 語音控制處理
+        } else if (tag.includes('PRIVATE_SPK')) {
+          console.log('📞 [PTT PRIVATE CALL CONTROL]', tag);
+          // TODO: 私人通話控制處理
+        } else {
+          // 其他未知的 CHANNEL_ANNOUNCE 訊息
+          handlePTT_Broadcast(channel, uuid, tag, data);
+        }
+        break;
+
+      case 'MARK':
+        handlePTT_MARK(channel, uuid, tag, data);
+        break;
+
+      case 'SPEECH':
+        console.log('🎙️ [PTT SPEECH] Audio data received (not implemented yet)');
+        // TODO: 音訊處理
+        break;
+
+      case 'PRIVATE':
+        console.log('📞 [PTT PRIVATE] Private call (not implemented yet)');
+        // TODO: 私人通話處理
+        break;
+
+      default:
+        console.log(`⚠️ Unknown PTT function: ${function_}`);
+    }
+
+  } catch (error) {
+    console.error('❌ PTT MQTT message error:', error);
+  }
+});
+
+pttMqttClient.on('error', (error) => {
+  console.error('❌ PTT MQTT Error:', error.message);
+});
+
+pttMqttClient.on('reconnect', () => {
+  console.log('🔄 PTT MQTT reconnecting...');
 });
 
 // ==================== WebSocket Server ====================
+const wss = new WebSocket.Server({ 
+  port: WS_PORT,
+  host: '0.0.0.0'  // ← 加上這行，監聽所有 IPv4 介面
+});
 
-const wss = new WebSocket.Server({ port: WS_PORT });
+wss.on('listening', () => {
+  console.log(`✅ WebSocket Server successfully started on port ${WS_PORT}`);
+  console.log(`   Listening on: ${HOST}:${WS_PORT}`);
+});
 
-wss.on('connection', (ws) => {
-  console.log('🔌 WebSocket client connected');
+wss.on('error', (error) => {
+  console.error(`❌ WebSocket Server failed:`, error);
+  if (error.code === 'EADDRINUSE') {
+    console.error(`⚠️  Port ${WS_PORT} is already in use!`);
+    process.exit(1);
+  }
+});
+
+// 新連線
+wss.on('connection', (ws, req) => {
+  const clientIp = req.socket.remoteAddress;
+  console.log(`🔌 WebSocket client connected from ${clientIp}`);
+  console.log(`   Total clients: ${wss.clients.size}`);
 
   const initialDevices = getValidDevices();
   ws.send(JSON.stringify({
     type: 'initial_state',
     devices: initialDevices,
     cotMessages: cotMessages.slice(-50),
-    streams: streamManager.getAllStreams(),
-    takStatus: takClient ? takClient.getStatus() : null,
+    streams: [],
+    takStatus: null,
     groups: getAllGroups()
   }));
 
@@ -650,11 +1101,12 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    console.log('🔌 WebSocket client disconnected');
+    console.log(`🔌 WebSocket client disconnected from ${clientIp}`);
+    console.log(`   Remaining clients: ${wss.clients.size}`);
   });
 
   ws.on('error', (error) => {
-    console.error('❌ WebSocket error:', error);
+    console.error('❌ WebSocket client error:', error);
   });
 });
 
@@ -754,6 +1206,16 @@ function handleWebSocketMessage(ws, data) {
   }
 }
 
+function getValidDevices() {
+  const devices = Array.from(connectedDevices.values());
+  return devices.filter(device => 
+    device && 
+    device.id && 
+    device.position && 
+    typeof device.position.lat === 'number' &&
+    typeof device.position.lng === 'number'
+  );
+}
 // ==================== 訊息處理函數 ====================
 
 function handleCotMessage(message) {
@@ -1139,7 +1601,7 @@ function generateDeviceCoT(device) {
 // ==================== Express 中介軟體 ====================
 
 app.use(cors({
-  origin: '*', // 開發環境允許所有來源
+  origin: '*',
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -1154,21 +1616,21 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     mqtt: {
-      connected: mqttClient.connected,
-      broker: MQTT_CONFIG.broker
+      mezzo: mqttClient.connected,
+      ptt: pttMqttClient.connected
     },
-    takServer: takClient ? takClient.getStatus() : { enabled: false },
     devices: {
       total: validDevices.length,
-      active: validDevices.filter(d => d.status === 'active').length
+      active: validDevices.filter(d => d.status === 'active').length,
+      ptt: validDevices.filter(d => d.source?.includes('ptt')).length
     },
     groups: {
       total: getAllGroups().length,
       list: getAllGroups()
     },
-    streams: {
-      total: streamManager.getAllStreams().length,
-      active: rtspProcesses.size
+    ptt: {
+      activeUsers: pttState.activeUsers.size,
+      sosAlerts: pttState.sosAlerts.size
     },
     websocket: {
       clients: wss.clients.size
@@ -1184,6 +1646,7 @@ app.get('/devices', (req, res) => {
     groups: getAllGroups()
   });
 });
+
 
 app.get('/devices/:deviceId', (req, res) => {
   const device = connectedDevices.get(req.params.deviceId);
@@ -1211,46 +1674,87 @@ app.get('/groups', (req, res) => {
 });
 
 app.post('/api/rtsp/register', (req, res) => {
-  const { streamId, rtspUrl, position, priority, callsign, group } = req.body;
+  // 支援兩種參數名稱：streamUrl (新) 和 rtspUrl (舊，向後相容)
+  const { streamId, streamUrl, rtspUrl, position, priority, callsign, group, directStream } = req.body;
+  const sourceUrl = streamUrl || rtspUrl;  // 優先使用 streamUrl
 
   if (!STREAM_CONFIG.enabled) {
     return res.status(503).json({
       success: false,
-      error: 'RTSP streaming not enabled'
+      error: 'Streaming not enabled'
     });
   }
 
-  if (!streamId || !rtspUrl || !position) {
+  if (!streamId || !sourceUrl || !position) {
     return res.status(400).json({
       success: false,
-      error: 'Missing required fields: streamId, rtspUrl, position'
+      error: 'Missing required fields: streamId, streamUrl (or rtspUrl), position'
     });
   }
 
   try {
-    const streamInfo = streamManager.startStream(streamId, rtspUrl, {
-      position: position,
-      priority: priority || 3,
-      callsign: callsign,
-      group: group
-    });
+    // 判斷串流類型
+    const isRTSP = sourceUrl.startsWith('rtsp://');
+    const isMJPEG = sourceUrl.includes('mjpeg') || sourceUrl.includes('.cgi');
+    const useDirectStream = directStream !== false && isMJPEG; // 預設對 MJPEG 使用直接串流
 
-    const device = {
-      id: streamId,
-      type: 'camera',
-      position: {
-        lat: parseFloat(position.lat),
-        lng: parseFloat(position.lon || position.lng),
-        alt: parseFloat(position.alt) || 0
-      },
-      priority: priority || 3,
-      callsign: callsign || streamId,
-      group: group || '未分組',
-      streamUrl: streamInfo.hlsUrl,
-      rtspUrl: rtspUrl,
-      status: 'active',
-      lastUpdate: new Date().toISOString()
-    };
+    let device;
+    let streamType;
+
+    if (useDirectStream) {
+      // MJPEG 直接串流，不經過 FFmpeg 轉換
+      console.log(`📷 [Direct Stream] 註冊 MJPEG 直接串流: ${streamId}`);
+      streamType = 'mjpeg';
+
+      device = {
+        id: streamId,
+        type: 'camera',
+        position: {
+          lat: parseFloat(position.lat),
+          lng: parseFloat(position.lon || position.lng),
+          alt: parseFloat(position.alt) || 0
+        },
+        priority: priority || 3,
+        callsign: callsign || streamId,
+        group: group || '未分組',
+        streamUrl: sourceUrl,    // 直接使用原始 URL
+        sourceUrl: sourceUrl,
+        rtspUrl: sourceUrl,      // 向後相容
+        streamType: 'mjpeg',
+        status: 'active',
+        lastUpdate: new Date().toISOString()
+      };
+    } else {
+      // RTSP 或需要轉換的串流，經過 FFmpeg
+      console.log(`🎥 [FFmpeg Stream] 註冊並轉換串流: ${streamId}`);
+      streamType = isRTSP ? 'rtsp' : 'http';
+
+      const streamInfo = streamManager.startStream(streamId, sourceUrl, {
+        position: position,
+        priority: priority || 3,
+        callsign: callsign,
+        group: group
+      });
+
+      device = {
+        id: streamId,
+        type: 'camera',
+        position: {
+          lat: parseFloat(position.lat),
+          lng: parseFloat(position.lon || position.lng),
+          alt: parseFloat(position.alt) || 0
+        },
+        priority: priority || 3,
+        callsign: callsign || streamId,
+        group: group || '未分組',
+        streamUrl: streamInfo.hlsUrl,  // HLS 轉換後的 URL
+        sourceUrl: sourceUrl,          // 原始串流來源
+        rtspUrl: sourceUrl,            // 向後相容
+        streamType: 'hls',
+        status: 'active',
+        lastUpdate: new Date().toISOString()
+      };
+    }
 
     connectedDevices.set(streamId, device);
     updateGroupIndex(streamId, device.group);
@@ -1270,7 +1774,7 @@ app.post('/api/rtsp/register', (req, res) => {
         const tempSocket = new net.Socket();
         
         // ⚠️ 直接連線到 FTS IP，不透過 TAKClient 類別
-        tempSocket.connect(8087, '172.20.10.2', () => {
+        tempSocket.connect(8087, '192.168.254.1', () => {
             console.log('✅ [暴力模式] 連線成功，發送 XML...');
             tempSocket.write(xmlPayload + '\n'); // 寫入資料
             tempSocket.end(); // 發送完馬上斷線
@@ -1290,7 +1794,10 @@ app.post('/api/rtsp/register', (req, res) => {
 
     res.json({
       success: true,
-      stream: streamInfo,
+      streamType: streamType,
+      message: useDirectStream
+        ? 'MJPEG 直接串流註冊成功，可立即使用'
+        : 'FFmpeg 轉換中，請稍候數秒後串流將可用',
       device: device
     });
   } catch (error) {
@@ -1521,6 +2028,114 @@ app.get('/api/tak/status', (req, res) => {
   }
 });
 
+// ==================== PTT MQTT API ====================
+// 添加到 server.js 中的 app.get('/api/tak/status'...) 之後
+
+app.post('/ptt/publish', (req, res) => {
+  try {
+    const { topic, message, encoding } = req.body;
+
+    if (!topic || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: topic, message'
+      });
+    }
+
+    console.log(`📤 Publishing to PTT MQTT: ${topic}`);
+
+    // 處理二進位訊息
+    let buffer;
+    if (encoding === 'binary' && Array.isArray(message)) {
+      buffer = Buffer.from(message);
+    } else if (typeof message === 'string') {
+      buffer = Buffer.from(message, 'utf8');
+    } else {
+      buffer = Buffer.from(JSON.stringify(message));
+    }
+
+    // 發布到 PTT MQTT
+    pttMqttClient.publish(topic, buffer, (err) => {
+      if (err) {
+        console.error('❌ PTT MQTT publish error:', err);
+        return res.status(500).json({
+          success: false,
+          error: err.message
+        });
+      }
+
+      console.log(`✅ PTT MQTT published: ${topic}`);
+      res.json({
+        success: true,
+        topic: topic,
+        messageSize: buffer.length
+      });
+    });
+  } catch (error) {
+    console.error('❌ PTT publish error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// PTT 狀態查詢
+app.get('/ptt/status', (req, res) => {
+  res.json({
+    connected: pttMqttClient.connected,
+    broker: PTT_MQTT_CONFIG.broker,
+    activeUsers: pttState.activeUsers.size,
+    sosAlerts: pttState.sosAlerts.size,
+    channels: Array.from(pttState.channelUsers.keys())
+  });
+});
+
+// PTT 活躍使用者列表
+app.get('/ptt/users', (req, res) => {
+  const users = Array.from(pttState.activeUsers.entries()).map(([uuid, info]) => ({
+    uuid,
+    channel: info.channel,
+    lastSeen: info.lastSeen,
+    timeSinceLastSeen: Date.now() - info.lastSeen
+  }));
+
+  res.json({
+    users,
+    count: users.length
+  });
+});
+
+// PTT SOS 警報列表
+app.get('/ptt/sos', (req, res) => {
+  const alerts = Array.from(pttState.sosAlerts.values());
+  
+  res.json({
+    alerts,
+    count: alerts.length
+  });
+});
+
+// 清除 SOS 警報
+app.delete('/ptt/sos/:id', (req, res) => {
+  const { id } = req.params;
+  
+  if (pttState.sosAlerts.has(id)) {
+    pttState.sosAlerts.delete(id);
+    
+    broadcastToClients({
+      type: 'sos_cleared',
+      id: id
+    });
+    
+    res.json({ success: true });
+  } else {
+    res.status(404).json({
+      success: false,
+      error: 'SOS alert not found'
+    });
+  }
+});
 // ==================== 💓 自動心跳機制 (Auto Heartbeat) ====================
 // 每 10 秒鐘，把所有已註冊的設備重新發送一次給 TAK Server
 // 這能確保：
@@ -1596,25 +2211,25 @@ setInterval(() => {
 // // ============================================================
 
 // ==================== 啟動服務器 ====================
-
-app.listen(HTTP_PORT, () => {
+app.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log('');
   console.log('╔═══════════════════════════════════════════════════════════╗');
   console.log('║   Mezzo TAK Integration Server - COMPLETE EDITION        ║');
   console.log('╚═══════════════════════════════════════════════════════════╝');
   console.log('');
   console.log('🚀 服務狀態:');
-  console.log(`   HTTP Server:  http://localhost:${HTTP_PORT}`);
-  console.log(`   WebSocket:    ws://localhost:${WS_PORT}`);
+  console.log(`   HTTP Server:  http://0.0.0.0:${HTTP_PORT}`);
+  console.log(`   WebSocket:    ws://0.0.0.0:${WS_PORT}`);
   console.log(`   MQTT Broker:  ${MQTT_CONFIG.broker}`);
   console.log(`   TAK Server:   ${TAK_CONFIG.enabled ? `✅ ${TAK_CONFIG.host}:${TAK_CONFIG.port}` : '❌ Disabled'}`);
   console.log(`   RTSP Streams: ${STREAM_CONFIG.enabled ? '✅ Enabled' : '❌ Disabled'}`);
   console.log('');
-  console.log('📋 新功能:');
+  console.log('📋 功能:');
   console.log('   ✅ ATAK 群組支援 (自動解析群組資訊)');
   console.log('   ✅ 訊息系統 (MQTT + WebSocket + TAK Server)');
   console.log('   ✅ 群組訊息路由');
   console.log('   ✅ 設備群組管理');
+  console.log('   ✅ RTSP 攝像頭註冊與串流');
   console.log('');
   console.log('📋 主要 API 端點:');
   console.log('   GET  /health                - 系統健康檢查');

@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
 import * as L from 'leaflet';
 import Hls from 'hls.js';
 import 'leaflet/dist/leaflet.css';
-import { CameraMapProps, Device } from '../types';
+import { CameraMapProps, Device } from '../types';  // ← 使用統一的類型
 import { getFullStreamUrl } from '../config/api';
 
 // 驗證設備數據是否有效
@@ -18,6 +18,7 @@ const isValidDevice = (device: any): device is Device => {
     !isNaN(device.position.lng)
   );
 };
+
 // 建立不同類型的圖示
 const createIcon = (type: string, color: string = 'blue', priority?: number) => {
   const priorityBadge = priority ? `<div style="position: absolute; top: -5px; right: -5px; background: red; color: white; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">P${priority}</div>` : '';
@@ -40,7 +41,10 @@ const getIconSymbol = (type: string) => {
     'vehicle': '🚗',
     'drone': '🚁',
     'base': '🏠',
-    'unknown': '📍'
+    'unknown': '📍',
+    'friendly': '🟢',
+    'hostile': '🔴',
+    'neutral': '⚪'
   };
   return symbols[type] || symbols['unknown'];
 };
@@ -68,14 +72,29 @@ const getPriorityColor = (priority: number) => {
 // 視訊播放器組件
 const VideoPlayer = ({ streamUrl, cameraId }: { streamUrl: string; cameraId: string }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [streamType, setStreamType] = useState<'hls' | 'mjpeg' | 'video'>('video');
 
   useEffect(() => {
-    if (!videoRef.current || !streamUrl) return;
+    if (!streamUrl) return;
 
-    // 檢查是否為 HLS 串流
+    // 判斷串流類型
     if (streamUrl.endsWith('.m3u8')) {
+      setStreamType('hls');
+    } else if (streamUrl.includes('mjpeg') || streamUrl.includes('.cgi')) {
+      setStreamType('mjpeg');
+    } else {
+      setStreamType('video');
+    }
+  }, [streamUrl]);
+
+  useEffect(() => {
+    if (!streamUrl) return;
+
+    // HLS 串流處理
+    if (streamType === 'hls' && videoRef.current) {
       if (Hls.isSupported()) {
         const hls = new Hls({
           enableWorker: true,
@@ -105,7 +124,6 @@ const VideoPlayer = ({ streamUrl, cameraId }: { streamUrl: string; cameraId: str
           hls.destroy();
         };
       } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-        // Safari 原生支援 HLS
         videoRef.current.src = streamUrl;
         videoRef.current.play().catch(e => console.warn('播放失敗:', e));
         setLoading(false);
@@ -113,13 +131,25 @@ const VideoPlayer = ({ streamUrl, cameraId }: { streamUrl: string; cameraId: str
         setError('瀏覽器不支援 HLS');
         setLoading(false);
       }
-    } else {
-      // 直接串流（例如 MP4）
+    }
+    // MJPEG 串流處理 - 使用 img 標籤
+    else if (streamType === 'mjpeg' && imgRef.current) {
+      imgRef.current.onload = () => {
+        setLoading(false);
+      };
+      imgRef.current.onerror = () => {
+        setError('MJPEG 串流載入失敗');
+        setLoading(false);
+      };
+      setLoading(false); // MJPEG 通常會立即開始顯示
+    }
+    // 一般視訊檔案
+    else if (streamType === 'video' && videoRef.current) {
       videoRef.current.src = streamUrl;
       videoRef.current.play().catch(e => console.warn('播放失敗:', e));
       setLoading(false);
     }
-  }, [streamUrl]);
+  }, [streamUrl, streamType]);
 
   return (
     <div className="relative bg-black rounded overflow-hidden" style={{ aspectRatio: '16/9' }}>
@@ -133,153 +163,76 @@ const VideoPlayer = ({ streamUrl, cameraId }: { streamUrl: string; cameraId: str
           <div className="text-red-400 text-sm">{error}</div>
         </div>
       )}
-      <video
-        ref={videoRef}
-        className="w-full h-full object-contain"
-        controls
-        muted
-        playsInline
-        style={{ display: loading ? 'none' : 'block' }}
-      />
+
+      {/* MJPEG 使用 img 標籤 */}
+      {streamType === 'mjpeg' ? (
+        <img
+          ref={imgRef}
+          src={streamUrl}
+          alt={cameraId}
+          className="w-full h-full object-contain"
+          style={{ display: loading ? 'none' : 'block' }}
+        />
+      ) : (
+        /* HLS 和一般視訊使用 video 標籤 */
+        <video
+          ref={videoRef}
+          className="w-full h-full object-contain"
+          controls
+          muted
+          playsInline
+          style={{ display: loading ? 'none' : 'block' }}
+        />
+      )}
+
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-        <div className="text-white text-xs font-medium">{cameraId}</div>
+        <div className="text-white text-xs font-medium">
+          {cameraId} {streamType === 'mjpeg' && <span className="text-xs opacity-75">(MJPEG)</span>}
+        </div>
       </div>
     </div>
   );
 };
 
-const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
-  const [devices, setDevices] = useState<Device[]>([]);
+
+const CameraMap: React.FC<CameraMapProps> = ({
+  devices: propsDevices = [],  // ← 加上預設值 = []
+  wsStatus = 'disconnected',
+  onDeviceSelect
+}) => {
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [showVideo, setShowVideo] = useState(false);
-  const [ws, setWs] = useState<WebSocket | null>(null);
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
-  const [mapCenter, setMapCenter] = useState<[number, number]>([24.993861, 121.2995]);
+  const [mapCenter, setMapCenter] = useState<[number, number]>([25.0338, 121.5646]);
   const [zoom, setZoom] = useState(13);
-  const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [priorityFilter, setPriorityFilter] = useState<number[]>([1, 2, 3, 4]);
 
-  // WebSocket connection
+  // ❌ 完全移除 WebSocket 相關的 state 和 useEffect
+  // const [devices, setDevices] = useState<Device[]>([]);
+  // const [ws, setWs] = useState<WebSocket | null>(null);
+  // const [wsStatus, setWsStatus] = useState<...>(...);
+  // useEffect(() => { ... WebSocket 連線 ... }, []);
+
+  // ✅ 直接使用從 props 傳入的 devices
+  const devices = propsDevices.filter(isValidDevice).map(device => ({
+    ...device,
+    lastUpdate: device.lastUpdate || new Date().toISOString()
+  }));
+
+  console.log(`📍 [CameraMap] Received ${devices.length} devices from props`);
+  // 當收到新設備時，更新地圖中心
   useEffect(() => {
-    let websocket: WebSocket | null = null;
-    let reconnectTimeout: NodeJS.Timeout;
-    let isMounted = true;  // ← 加這個
-
-    const connectWebSocket = () => {
-      if (!isMounted) return;  // ← 檢查是否已卸載
-
-      try {
-        setWsStatus('connecting');
-        console.log('🔌 嘗試連接 WebSocket...');
-
-        websocket = new WebSocket('ws://localhost:4001');
-
-        websocket.onopen = () => {
-          if (!isMounted) return;  // ← 檢查
-          console.log('✅ WebSocket 連接成功');
-          setWsStatus('connected');
-          websocket?.send(JSON.stringify({ type: 'request_devices' }));
-        };
-
-        websocket.onmessage = (event) => {
-          if (!isMounted) return;  // ← 檢查
-          try {
-            const data = JSON.parse(event.data);
-
-            switch (data.type) {
-              case 'initial_state':
-                const validInitialDevices = (data.devices || []).filter(isValidDevice);
-                setDevices(validInitialDevices);
-                break;
-
-              case 'devices_update':
-                const validUpdateDevices = (data.devices || []).filter(isValidDevice);
-                setDevices(validUpdateDevices);
-                break;
-
-              case 'mqtt_message':
-                if (data.topic === 'myapp/camera/gps' ||
-                  data.topic === 'myapp/cot/message' ||
-                  data.topic.includes('status')) {
-                  websocket?.send(JSON.stringify({ type: 'request_devices' }));
-                }
-                break;
-            }
-          } catch (error) {
-            console.error('❌ WebSocket 訊息解析錯誤:', error);
-          }
-        };
-
-        websocket.onerror = () => {
-          console.error('❌ WebSocket 錯誤');
-          setWsStatus('error');
-        };
-
-        websocket.onclose = () => {
-          if (!isMounted) return;  // ← 不重連已卸載的組件
-
-          console.log('🔌 WebSocket 斷線');
-          setWsStatus('disconnected');
-
-          // 指數退避重連
-          const delay = Math.min(1000 * Math.pow(1.5, Math.floor(Math.random() * 5)), 10000);
-          console.log(`⏳ ${(delay / 1000).toFixed(1)} 秒後重新連接...`);
-
-          reconnectTimeout = setTimeout(() => {
-            connectWebSocket();
-          }, delay);
-        };
-
-        setWs(websocket);
-      } catch (error) {
-        console.error('❌ WebSocket 連接失敗:', error);
-        setWsStatus('error');
-      }
-    };
-
-    connectWebSocket();
-
-    return () => {
-      console.log('🧹 清理 WebSocket');
-      isMounted = false;  // ← 標記為已卸載
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (websocket) {
-        websocket.onclose = null;  // ← 防止觸發重連
-        websocket.close();
-      }
-    };
-  }, []);  // ← 空依賴！！！只在組件掛載時執行一次
-
-  // Auto-refresh devices
-  useEffect(() => {
-    if (wsStatus !== 'connected' || !ws) return;
-
-    const interval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'request_devices' }));
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [ws, wsStatus]);
-
-  const sendCommand = (action: string, deviceId?: string) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'send_command',
-        topic: 'camera/control',
-        payload: { action, deviceId, timestamp: new Date().toISOString() }
-      }));
-      console.log(`📤 發送指令: ${action}`);
+    if (devices.length > 0 && !selectedDevice) {
+      const avgLat = devices.reduce((sum, d) => sum + d.position.lat, 0) / devices.length;
+      const avgLng = devices.reduce((sum, d) => sum + d.position.lng, 0) / devices.length;
+      setMapCenter([avgLat, avgLng]);
     }
-  };
+  }, [devices, selectedDevice]);
 
-  const manualReconnect = () => {
-    setReconnectAttempts(0);
-    setWsStatus('connecting');
-  };
+  // ❌ 移除 sendCommand（應該由父組件處理）
+  // const sendCommand = (action: string, deviceId?: string) => { ... };
 
-  const formatTime = (timestamp: string) => {
+  const formatTime = (timestamp?: string) => {
+    if (!timestamp) return 'N/A';
     try {
       const date = new Date(timestamp);
       return isNaN(date.getTime()) ? 'N/A' : date.toLocaleTimeString('zh-TW', {
@@ -288,7 +241,8 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
     } catch { return 'N/A'; }
   };
 
-  const getTimeSince = (timestamp: string) => {
+  const getTimeSince = (timestamp?: string) => {
+    if (!timestamp) return 'N/A';
     try {
       const diff = Date.now() - new Date(timestamp).getTime();
       if (isNaN(diff)) return 'N/A';
@@ -312,7 +266,6 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
 
   // 過濾設備
   const filteredDevices = devices.filter(device =>
-    isValidDevice(device) &&
     priorityFilter.includes(device.priority || 3)
   );
 
@@ -328,20 +281,14 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
       {/* Status Banner */}
       {wsStatus === 'error' && (
         <div className="p-3 text-center text-sm font-medium bg-red-100 text-red-800">
-          ❌ 連接失敗，正在重試...
-          <button
-            onClick={manualReconnect}
-            className="ml-3 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
-          >
-            立即重連
-          </button>
+          ❌ 連接失敗
         </div>
       )}
 
       {/* Header */}
       <div className="p-3 border-b border-gray-200 bg-white">
         <div className="flex justify-between items-center mb-2">
-          <h2 className="font-semibold text-sm">即時追蹤地圖 + 視訊監控</h2>
+          <h2 className="font-semibold text-sm">即時追蹤地圖</h2>
           <div className="flex gap-2 text-xs">
             <span className="px-2 py-1 bg-green-100 text-green-700 rounded">
               {filteredDevices.filter(d => d.status === 'active').length} 活躍
@@ -373,7 +320,7 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
         </div>
       </div>
 
-      {/* 在地圖 Popup 中 */}
+      {/* Video Modal */}
       {showVideo && selectedDeviceData?.streamUrl && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full">
@@ -429,11 +376,10 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
                   )}
                   eventHandlers={{
                     click: () => {
+                      console.log('📍 [CameraMap] Marker clicked:', device.id);
                       setSelectedDevice(device.id);
                       if (onDeviceSelect) {
                         onDeviceSelect(device);
-                      } else if (device.streamUrl) {
-                        setShowVideo(true);
                       }
                     }
                   }}
@@ -452,6 +398,7 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
                           {device.status || 'unknown'}
                         </span></div>
                         {device.battery && <div>電量: <span className="font-medium">{device.battery}%</span></div>}
+                        {device.group && <div>群組: <span className="font-medium">{device.group}</span></div>}
                         <div>位置: {device.position.lat.toFixed(6)}, {device.position.lng.toFixed(6)}</div>
                         {device.streamUrl && (
                           <button
@@ -500,11 +447,10 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
                   }`}
                 style={{ borderLeftColor: getPriorityColor(device.priority || 3), borderLeftWidth: '4px' }}
                 onClick={() => {
+                  console.log('📍 [CameraMap] Device clicked:', device.id);
                   setSelectedDevice(device.id);
                   if (onDeviceSelect) {
                     onDeviceSelect(device);
-                  } else if (device.streamUrl) {
-                    setShowVideo(true);
                   }
                 }}
               >
@@ -527,6 +473,7 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
                         </div>
                         <div className="text-xs text-gray-500">
                           {device.position.lat.toFixed(4)}, {device.position.lng.toFixed(4)}
+                          {device.group && ` • ${device.group}`}
                         </div>
                       </div>
                     </div>
@@ -543,39 +490,19 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
                       {device.status || 'unknown'}
                     </span>
                     {device.streamUrl && (
-                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">
-                        📹 有視訊
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {device.type === 'camera' && device.status === 'active' && (
-                  <div className="flex gap-1 mt-2">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); sendCommand('left', device.id); }}
-                      className="flex-1 px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                      disabled={wsStatus !== 'connected'}
-                    >
-                      ⬅ 左轉
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); sendCommand('right', device.id); }}
-                      className="flex-1 px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                      disabled={wsStatus !== 'connected'}
-                    >
-                      右轉 ➡
-                    </button>
-                    {device.streamUrl && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setShowVideo(true); }}
-                        className="flex-1 px-2 py-1 text-xs bg-purple-500 text-white rounded hover:bg-purple-600"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedDevice(device.id);
+                          setShowVideo(true);
+                        }}
+                        className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200"
                       >
                         📹 視訊
                       </button>
                     )}
                   </div>
-                )}
+                </div>
               </div>
             ))}
           </div>
@@ -585,7 +512,7 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
       {/* Footer */}
       <div className="p-2 bg-gray-50 border-t border-gray-200 flex justify-between items-center text-xs">
         <span className="text-gray-600">
-          WebSocket: {wsStatus === 'connected' ? (
+          狀態: {wsStatus === 'connected' ? (
             <span className="text-green-600 font-medium">● 已連接</span>
           ) : wsStatus === 'connecting' ? (
             <span className="text-yellow-600 font-medium">● 連接中...</span>
@@ -596,10 +523,11 @@ const CameraMap: React.FC<CameraMapProps> = ({ onDeviceSelect }) => {
           )}
         </span>
         <span className="text-gray-600">
-          最後更新: {sortedDevices.length > 0 ? getTimeSince(sortedDevices[0].lastUpdate) : 'N/A'}
+          設備: {devices.length} | 顯示: {sortedDevices.length}
         </span>
       </div>
     </>
   );
 };
+
 export default CameraMap;

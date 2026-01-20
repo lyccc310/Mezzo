@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import CameraMap from './CameraMap';
 import VideoPlayer from './VideoPlayer';
 import { getFullStreamUrl } from '../config/api';
-import { MapPin, Video, Wifi, Activity, Clock, Send, Users, MessageSquare } from 'lucide-react';
+import { Device, Message } from '../types'; 
+import { MapPin, Video, Wifi, Activity, Clock, Send, Users, MessageSquare, Radio, AlertCircle, Mic } from 'lucide-react';
 
 // ===== 配置 =====
 const API_CONFIG = {
@@ -20,37 +21,6 @@ const WS_URL = API_CONFIG.baseUrl.replace('http', 'ws').replace(':4000', ':4001'
 console.log('📡 GPSTracking API Config:', API_CONFIG.baseUrl);
 console.log('📡 GPSTracking WebSocket:', WS_URL);
 
-// ===== 設備介面 =====
-interface Device {
-    id: string;
-    type: string;
-    position: {
-        lat: number;
-        lng: number;
-        alt?: number;
-    };
-    callsign?: string;
-    status?: string;
-    priority?: number;
-    streamUrl?: string;
-    rtspUrl?: string;
-    lastUpdate?: string;
-    battery?: number;
-    signal?: number;
-    source?: string;
-    group?: string; // 設備群組
-}
-
-// ===== 訊息介面 =====
-interface Message {
-    id: string;
-    from: string;
-    to: string; // 'all', 'group:xxx', 'device:xxx'
-    text: string;
-    timestamp: string;
-    priority?: number;
-}
-
 const GPSTracking: React.FC = () => {
     const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
     const [devices, setDevices] = useState<Device[]>([]);
@@ -59,54 +29,291 @@ const GPSTracking: React.FC = () => {
     // ===== 通訊相關狀態 =====
     const [messages, setMessages] = useState<Message[]>([]);
     const [messageText, setMessageText] = useState('');
-    const [selectedRecipient, setSelectedRecipient] = useState<string>('all');
     const [showCommunication, setShowCommunication] = useState(false);
+    const [selectedGroup, setSelectedGroup] = useState<string>('all');
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    // ===== PTT 控制狀態 =====
+    const [showPTTControl, setShowPTTControl] = useState(false);
+    const [pttChannel, setPttChannel] = useState('channel1');
+    const [pttDeviceId, setPttDeviceId] = useState('USER-001');
+    const [gpsLat, setGpsLat] = useState('25.033964');
+    const [gpsLon, setGpsLon] = useState('121.564472');
+    const [sosLat, setSosLat] = useState('25.033964');
+    const [sosLon, setSosLon] = useState('121.564472');
+    const [broadcastMsg, setBroadcastMsg] = useState('');
+    const [isRecording, setIsRecording] = useState(false);
+    const [pttStatus, setPttStatus] = useState('');
+    const [pttStatusType, setPttStatusType] = useState<'success' | 'error' | 'info'>('info');
+
+    // ===== 使用 useRef 保存 WebSocket 和重連計時器 =====
+    const wsRef = useRef<WebSocket | null>(null);
+    const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const reconnectAttemptsRef = useRef(0);
 
     // ===== 提取設備群組 =====
     const deviceGroups = Array.from(
         new Set(devices.map((d) => d.group || '未分組').filter(Boolean))
     );
 
-    // ===== WebSocket 連接 =====
-    useEffect(() => {
-        let ws: WebSocket | null = null;
-        let reconnectTimer: NodeJS.Timeout | null = null;
+    // ===== 提取 PTT 頻道列表 (包含固定頻道和動態群組) =====
+    const pttChannels = Array.from(
+        new Set([
+            'channel1',
+            'channel2',
+            'channel3',
+            'emergency',
+            ...deviceGroups.filter(g => g !== '未分組')
+        ])
+    );
 
+    // ===== PTT 函數 =====
+    const showPTTStatus = (msg: string, type: 'success' | 'error' | 'info' = 'info') => {
+        setPttStatus(msg);
+        setPttStatusType(type);
+        setTimeout(() => setPttStatus(''), 5000);
+    };
+
+    const createPTTMessage = (tag: string, uuid: string, data: string): number[] => {
+        const tagBuffer = new Uint8Array(32);
+        const tagBytes = new TextEncoder().encode(tag);
+        tagBuffer.set(tagBytes.slice(0, 32));
+
+        const uuidBuffer = new Uint8Array(128);
+        const uuidBytes = new TextEncoder().encode(uuid);
+        uuidBuffer.set(uuidBytes.slice(0, 128));
+
+        const dataBytes = new TextEncoder().encode(data);
+        const combined = new Uint8Array(160 + dataBytes.length);
+        combined.set(tagBuffer, 0);
+        combined.set(uuidBuffer, 32);
+        combined.set(dataBytes, 160);
+
+        return Array.from(combined);
+    };
+
+    // ===== PTT 通訊訊息發送 =====
+    const sendPTTMessage = async (channel: string, text: string) => {
+        try {
+            const topic = `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`;
+            const tag = 'TEXT_MESSAGE'; // 自定義 tag 用於文字訊息
+            const message = createPTTMessage(tag, pttDeviceId, text);
+
+            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, message, encoding: 'binary' })
+            });
+
+            if (response.ok) {
+                console.log('💬 PTT Message sent:', { topic, text });
+                return true;
+            } else {
+                throw new Error('Failed to send PTT message');
+            }
+        } catch (error) {
+            console.error('❌ Send PTT Message error:', error);
+            return false;
+        }
+    };
+
+    const sendPTTGPS = async () => {
+        try {
+            const topic = `/WJI/PTT/${pttChannel}/GPS`;
+            const data = `${pttDeviceId},${gpsLat},${gpsLon}`;
+            const message = createPTTMessage('GPS', pttDeviceId, data);
+
+            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, message, encoding: 'binary' })
+            });
+
+            if (response.ok) {
+                showPTTStatus(`✅ GPS 已發送至 ${topic}`, 'success');
+                console.log('📍 PTT GPS sent:', { topic, lat: gpsLat, lon: gpsLon });
+
+                // 在通訊面板顯示 GPS 發送通知
+                const notificationMessage: Message = {
+                    id: `gps-${Date.now()}`,
+                    from: pttDeviceId,
+                    to: `group:${pttChannel}`,
+                    text: `📍 發送了位置資訊 (${gpsLat}, ${gpsLon})`,
+                    timestamp: new Date().toISOString(),
+                    priority: 3
+                };
+                setMessages(prev => [...prev, notificationMessage]);
+            } else {
+                throw new Error('Failed to send GPS');
+            }
+        } catch (error) {
+            console.error('❌ Send PTT GPS error:', error);
+            showPTTStatus('❌ 發送 GPS 失敗', 'error');
+        }
+    };
+
+    const sendPTTSOS = async () => {
+        try {
+            const topic = `/WJI/PTT/${pttChannel}/SOS`;
+            const data = `${sosLat},${sosLon}`;
+            const message = createPTTMessage('SOS', pttDeviceId, data);
+
+            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, message, encoding: 'binary' })
+            });
+
+            if (response.ok) {
+                showPTTStatus(`🆘 SOS 警報已發送至 ${topic}`, 'success');
+                console.log('🆘 PTT SOS sent:', { topic, lat: sosLat, lon: sosLon });
+
+                // 在通訊面板顯示 SOS 緊急通知
+                const sosNotification: Message = {
+                    id: `sos-${Date.now()}`,
+                    from: pttDeviceId,
+                    to: `group:${pttChannel}`,
+                    text: `🆘 發送了緊急求救訊號！位置: (${sosLat}, ${sosLon})`,
+                    timestamp: new Date().toISOString(),
+                    priority: 1
+                };
+                setMessages(prev => [...prev, sosNotification]);
+            } else {
+                throw new Error('Failed to send SOS');
+            }
+        } catch (error) {
+            console.error('❌ Send PTT SOS error:', error);
+            showPTTStatus('❌ 發送 SOS 失敗', 'error');
+        }
+    };
+
+    const sendPTTBroadcast = async () => {
+        if (!broadcastMsg.trim()) {
+            showPTTStatus('⚠️ 請輸入訊息內容', 'error');
+            return;
+        }
+
+        try {
+            const topic = `/WJI/PTT/${pttChannel}/CHANNEL_ANNOUNCE`;
+            const message = createPTTMessage('BROADCAST', pttDeviceId, broadcastMsg);
+
+            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, message, encoding: 'binary' })
+            });
+
+            if (response.ok) {
+                showPTTStatus(`📢 廣播訊息已發送`, 'success');
+                console.log('📢 PTT Broadcast sent:', { topic, message: broadcastMsg });
+
+                // 在通訊面板顯示廣播訊息
+                const broadcastNotification: Message = {
+                    id: `broadcast-${Date.now()}`,
+                    from: pttDeviceId,
+                    to: `group:${pttChannel}`,
+                    text: `📢 ${broadcastMsg}`,
+                    timestamp: new Date().toISOString(),
+                    priority: 3
+                };
+                setMessages(prev => [...prev, broadcastNotification]);
+
+                setBroadcastMsg('');
+            } else {
+                throw new Error('Failed to send broadcast');
+            }
+        } catch (error) {
+            console.error('❌ Send PTT Broadcast error:', error);
+            showPTTStatus('❌ 發送廣播失敗', 'error');
+        }
+    };
+
+    const toggleRecording = async () => {
+        try {
+            const topic = `/WJI/PTT/${pttChannel}/MARK`;
+            const tag = isRecording ? 'MARK_STOP' : 'MARK_START';
+            const message = createPTTMessage(tag, pttDeviceId, '');
+
+            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, message, encoding: 'binary' })
+            });
+
+            if (response.ok) {
+                const newState = !isRecording;
+                setIsRecording(newState);
+                const statusText = newState ? '📹 錄影已開始' : '⏹️ 錄影已停止';
+                showPTTStatus(statusText, 'success');
+                console.log('📹 PTT Recording:', newState);
+
+                // 在通訊面板顯示錄影狀態
+                const recordingNotification: Message = {
+                    id: `recording-${Date.now()}`,
+                    from: pttDeviceId,
+                    to: `group:${pttChannel}`,
+                    text: statusText,
+                    timestamp: new Date().toISOString(),
+                    priority: 3
+                };
+                setMessages(prev => [...prev, recordingNotification]);
+            } else {
+                throw new Error('Failed to toggle recording');
+            }
+        } catch (error) {
+            console.error('❌ Toggle PTT Recording error:', error);
+            showPTTStatus('❌ 錄影控制失敗', 'error');
+        }
+    };
+
+    // ===== WebSocket 連接（改良版）=====
+    useEffect(() => {
         const connectWebSocket = () => {
+            if (wsRef.current) {
+                wsRef.current.close();
+                wsRef.current = null;
+            }
+
             try {
-                console.log('🔌 Connecting to WebSocket:', WS_URL);
-                ws = new WebSocket(WS_URL);
+                console.log(`🔌 Connecting to WebSocket: ${WS_URL} (Attempt ${reconnectAttemptsRef.current + 1})`);
+                const ws = new WebSocket(WS_URL);
+                wsRef.current = ws;
 
                 ws.onopen = () => {
                     console.log('✅ WebSocket connected');
                     setWsConnected(true);
+                    reconnectAttemptsRef.current = 0;
+                    ws.send(JSON.stringify({ type: 'request_devices' }));
 
-                    // 請求初始設備列表
-                    ws?.send(JSON.stringify({ type: 'request_devices' }));
+                    const heartbeat = setInterval(() => {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: 'ping' }));
+                        }
+                    }, 30000);
+
+                    (ws as any).heartbeatInterval = heartbeat;
                 };
 
                 ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
+                        if (data.type === 'pong') return;
+
                         console.log('📨 WebSocket message:', data.type);
 
-                        // 處理初始設備列表
                         if (data.type === 'initial_state' && data.devices) {
                             console.log(`📋 Initial devices: ${data.devices.length}`);
                             setDevices(data.devices);
-
                             if (data.devices.length > 0 && !selectedDevice) {
                                 setSelectedDevice(data.devices[0]);
                             }
                         }
 
-                        // 處理設備列表更新
                         if (data.type === 'devices_update' && data.devices) {
                             console.log(`📋 Devices update: ${data.devices.length}`);
                             setDevices(data.devices);
                         }
 
-                        // 處理單個設備更新
                         if (data.type === 'device_update' && data.device) {
                             console.log(`📱 Device update: ${data.device.id}`);
                             setDevices((prev) => {
@@ -114,19 +321,20 @@ const GPSTracking: React.FC = () => {
                                 if (index !== -1) {
                                     const updated = [...prev];
                                     updated[index] = data.device;
-
-                                    if (selectedDevice && selectedDevice.id === data.device.id) {
-                                        setSelectedDevice(data.device);
-                                    }
-
                                     return updated;
                                 } else {
                                     return [...prev, data.device];
                                 }
                             });
+
+                            setSelectedDevice((current) => {
+                                if (current && current.id === data.device.id) {
+                                    return data.device;
+                                }
+                                return current;
+                            });
                         }
 
-                        // 處理設備添加
                         if (data.type === 'device_added' && data.device) {
                             console.log(`➕ Device added: ${data.device.id}`);
                             setDevices((prev) => {
@@ -134,32 +342,84 @@ const GPSTracking: React.FC = () => {
                                     return prev;
                                 }
                                 const newDevices = [...prev, data.device];
-
                                 if (newDevices.length === 1) {
                                     setSelectedDevice(data.device);
                                 }
-
                                 return newDevices;
                             });
                         }
 
-                        // 處理設備移除
                         if (data.type === 'device_removed' && data.deviceId) {
                             console.log(`➖ Device removed: ${data.deviceId}`);
                             setDevices((prev) => prev.filter((d) => d.id !== data.deviceId));
-
-                            if (selectedDevice && selectedDevice.id === data.deviceId) {
-                                setSelectedDevice(null);
-                            }
+                            setSelectedDevice((current) => {
+                                if (current && current.id === data.deviceId) {
+                                    return null;
+                                }
+                                return current;
+                            });
                         }
 
-                        // ===== 處理接收訊息 =====
-                        if (data.type === 'message' && data.message) {
-                            console.log('💬 Received message:', data.message);
-                            setMessages((prev) => [...prev, data.message]);
+                        if (data.type === 'messages_history' && data.messages) {
+                            console.log(`📜 Messages history: ${data.messages.length}`);
+                            setMessages(data.messages);
                         }
 
-                        // 處理 MQTT 訊息
+                        // 處理 PTT 訊息廣播 (統一處理所有 PTT 訊息)
+                        if (data.type === 'ptt_broadcast' && data.message) {
+                            console.log('💬 Received PTT broadcast:', data.message);
+                            setMessages((prev) => {
+                                // 避免重複訊息
+                                if (prev.find(m => m.id === data.message.id)) {
+                                    return prev;
+                                }
+                                return [...prev, data.message];
+                            });
+                        }
+
+                        // 處理 PTT GPS 更新
+                        if (data.type === 'device_update' && data.device && data.device.source?.includes('ptt')) {
+                            const device = data.device;
+                            const gpsNotification: Message = {
+                                id: `gps-update-${Date.now()}`,
+                                from: device.id,
+                                to: `group:${device.group || 'PTT'}`,
+                                text: `📍 更新了位置資訊 (${device.position.lat.toFixed(6)}, ${device.position.lng.toFixed(6)})`,
+                                timestamp: new Date().toISOString(),
+                                priority: 3
+                            };
+                            setMessages((prev) => [...prev, gpsNotification]);
+                        }
+
+                        // 處理 SOS 警報
+                        if (data.type === 'sos_alert' && data.event) {
+                            const event = data.event;
+                            const sosAlert: Message = {
+                                id: `sos-alert-${Date.now()}`,
+                                from: event.deviceId || event.id,
+                                to: `group:${event.group || 'PTT'}`,
+                                text: `🆘 緊急求救！位置: (${event.position.lat.toFixed(6)}, ${event.position.lng.toFixed(6)})`,
+                                timestamp: event.timestamp,
+                                priority: 1
+                            };
+                            setMessages((prev) => [...prev, sosAlert]);
+                        }
+
+                        // 處理錄影標記
+                        if (data.type === 'ptt_mark' && data.event) {
+                            const event = data.event;
+                            const action = event.action === 'start' ? '📹 開始錄影' : '⏹️ 停止錄影';
+                            const markNotification: Message = {
+                                id: `mark-${Date.now()}`,
+                                from: event.deviceId,
+                                to: `group:${event.channel || 'PTT'}`,
+                                text: action,
+                                timestamp: event.timestamp,
+                                priority: 3
+                            };
+                            setMessages((prev) => [...prev, markNotification]);
+                        }
+
                         if (data.type === 'mqtt_message' && data.topic && data.data) {
                             console.log('📡 MQTT message:', data.topic);
                         }
@@ -170,108 +430,131 @@ const GPSTracking: React.FC = () => {
 
                 ws.onerror = (error) => {
                     console.error('❌ WebSocket error:', error);
-                    setWsConnected(false);
                 };
 
-                ws.onclose = () => {
-                    console.log('🔌 WebSocket disconnected');
+                ws.onclose = (event) => {
+                    console.log('🔌 WebSocket disconnected', {
+                        code: event.code,
+                        reason: event.reason || 'No reason provided',
+                        wasClean: event.wasClean
+                    });
+                    
                     setWsConnected(false);
 
-                    reconnectTimer = setTimeout(() => {
-                        console.log('🔄 Reconnecting WebSocket...');
-                        connectWebSocket();
-                    }, 5000);
+                    if ((ws as any).heartbeatInterval) {
+                        clearInterval((ws as any).heartbeatInterval);
+                    }
+
+                    if (event.code !== 1000) {
+                        reconnectAttemptsRef.current++;
+                        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+                        console.log(`🔄 Reconnecting in ${delay / 1000}s...`);
+                        reconnectTimerRef.current = setTimeout(() => {
+                            connectWebSocket();
+                        }, delay);
+                    }
                 };
             } catch (error) {
                 console.error('❌ WebSocket connection error:', error);
+                setWsConnected(false);
             }
         };
 
         connectWebSocket();
 
         return () => {
-            if (reconnectTimer) {
-                clearTimeout(reconnectTimer);
+            console.log('🧹 Cleaning up WebSocket');
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
             }
-            if (ws) {
-                ws.close();
+            if (wsRef.current) {
+                wsRef.current.close(1000, 'Component unmounted');
+                wsRef.current = null;
             }
         };
     }, []);
 
-    // 定期從 API 重新載入設備（備用）
+    // ===== 定期從 API 重新載入設備（備用）=====
     useEffect(() => {
-        const loadDevices = async () => {
-            if (wsConnected) return;
+        if (wsConnected) {
+            console.log('✅ WebSocket active, skipping API polling');
+            return;
+        }
 
+        console.log('⚠️ WebSocket inactive, starting API polling');
+
+        const loadDevices = async () => {
             try {
                 const response = await fetch(`${API_CONFIG.baseUrl}/devices`);
                 if (response.ok) {
                     const data = await response.json();
+                    console.log(`📋 Loaded ${data.devices?.length || 0} devices from API`);
                     setDevices(data.devices || []);
                 }
             } catch (error) {
-                console.error('❌ Failed to load devices:', error);
+                console.error('❌ Failed to load devices from API:', error);
             }
         };
 
-        const interval = setInterval(loadDevices, 10000);
         loadDevices();
+        const interval = setInterval(loadDevices, 10000);
 
-        return () => clearInterval(interval);
+        return () => {
+            console.log('🧹 Stopping API polling');
+            clearInterval(interval);
+        };
     }, [wsConnected]);
 
-    // ===== 發送訊息 =====
+    // ===== 發送訊息 (使用 PTT MQTT) =====
     const handleSendMessage = async () => {
         if (!messageText.trim()) return;
 
         try {
-            const message = {
-                from: 'COMMAND_CENTER',
-                to: selectedRecipient,
-                text: messageText,
-                priority: selectedDevice?.priority || 3,
-                timestamp: new Date().toISOString(),
-            };
+            // 決定要發送到哪個頻道
+            let channel = pttChannel; // 預設使用當前 PTT 頻道
 
-            console.log('📤 Sending message:', message);
+            // 如果選擇了特定群組，使用該群組名稱作為頻道
+            if (selectedGroup !== 'all') {
+                channel = selectedGroup;
+            }
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/send-message`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(message),
-            });
+            // 使用 PTT MQTT 發送訊息
+            const success = await sendPTTMessage(channel, messageText);
 
-            if (response.ok) {
-                console.log('✅ Message sent successfully');
+            if (success) {
+                // 本地顯示已發送的訊息
+                const localMessage: Message = {
+                    id: `msg-${Date.now()}`,
+                    from: 'COMMAND_CENTER',
+                    to: selectedGroup === 'all' ? 'all' : `group:${selectedGroup}`,
+                    text: messageText,
+                    timestamp: new Date().toISOString(),
+                    priority: 3
+                };
 
-                // 添加到本地訊息列表
-                setMessages((prev) => [
-                    ...prev,
-                    {
-                        id: `msg-${Date.now()}`,
-                        ...message,
-                    },
-                ]);
-
-                // 清空輸入
+                setMessages(prev => [...prev, localMessage]);
                 setMessageText('');
+
+                showPTTStatus(`✅ 訊息已發送至頻道 ${channel}`, 'success');
             } else {
-                console.error('❌ Failed to send message');
+                showPTTStatus('❌ 發送訊息失敗', 'error');
             }
         } catch (error) {
             console.error('❌ Send message error:', error);
+            showPTTStatus('❌ 發送訊息失敗', 'error');
         }
     };
 
     // ===== 處理地圖選擇設備 =====
     const handleDeviceSelect = (device: Device) => {
-        console.log('📍 Device selected:', device);
+        console.log('📍 Device selected from map:', device.id);
         setSelectedDevice(device);
     };
 
     // ===== 處理設備列表點擊 =====
     const handleDeviceClick = (device: Device) => {
+        console.log('📍 Device selected from list:', device.id);
         setSelectedDevice(device);
     };
 
@@ -279,352 +562,449 @@ const GPSTracking: React.FC = () => {
     const formatLastUpdate = (timestamp?: string) => {
         if (!timestamp) return '未知';
 
-        const now = new Date();
-        const update = new Date(timestamp);
-        const diff = now.getTime() - update.getTime();
+        try {
+            const now = new Date();
+            const update = new Date(timestamp);
+            const diff = now.getTime() - update.getTime();
 
-        if (diff < 60000) return '剛剛';
-        if (diff < 3600000) return `${Math.floor(diff / 60000)} 分鐘前`;
-        if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小時前`;
-        return update.toLocaleDateString('zh-TW');
+            if (diff < 0) return '剛剛';
+            if (diff < 60000) return '剛剛';
+            if (diff < 3600000) return `${Math.floor(diff / 60000)} 分鐘前`;
+            if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小時前`;
+            return update.toLocaleDateString('zh-TW');
+        } catch {
+            return '未知';
+        }
     };
 
     // ===== 格式化訊息時間 =====
     const formatMessageTime = (timestamp: string) => {
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString('zh-TW', {
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+        try {
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString('zh-TW', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        } catch {
+            return '--:--';
+        }
     };
 
     // ===== 篩選相關訊息 =====
     const relevantMessages = messages.filter((msg) => {
-        if (!selectedDevice) return msg.to === 'all';
+        // 如果選擇了特定群組，只顯示該群組的訊息
+        if (selectedGroup !== 'all') {
+            return (
+                msg.to === 'all' ||
+                msg.to === `group:${selectedGroup}` ||
+                msg.from === selectedGroup
+            );
+        }
 
-        return (
-            msg.to === 'all' ||
-            msg.to === `device:${selectedDevice.id}` ||
-            (selectedDevice.group && msg.to === `group:${selectedDevice.group}`)
-        );
+        // 如果選擇了特定設備，顯示該設備相關的訊息
+        if (selectedDevice) {
+            return (
+                msg.to === 'all' ||
+                msg.to === `device:${selectedDevice.id}` ||
+                msg.from === selectedDevice.id ||
+                (selectedDevice.group && msg.to === `group:${selectedDevice.group}`)
+            );
+        }
+
+        // 預設顯示所有訊息
+        return msg.to === 'all';
     });
 
+    // ===== 自動滾動到最新訊息 =====
+    useEffect(() => {
+        if (showCommunication && messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [messages, showCommunication]);
+
     return (
-        <div className="flex h-full bg-gray-100">
-            {/* 左側：地圖 (50%) */}
+        <div className="flex h-screen bg-gray-100 overflow-hidden">
+            {/* 左側：地圖 (50%) - 固定 */}
             <div className="w-1/2 h-full">
-                <CameraMap onDeviceSelect={handleDeviceSelect} />
+                <CameraMap
+                    devices={devices}
+                    wsStatus={wsConnected ? 'connected' : 'disconnected'}
+                    onDeviceSelect={handleDeviceSelect}
+                />
             </div>
 
-            {/* 右側：設備資訊面板 (50%) */}
-            <div className="w-1/2 flex flex-col h-full border-l border-gray-200">
-                {/* 狀態欄 */}
-                <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-                            <span className="text-xs font-medium text-gray-700">
-                                {wsConnected ? 'WebSocket 已連接' : 'WebSocket 未連接'}
-                            </span>
-                        </div>
-                        <div className="text-xs text-gray-500">
-                            設備總數: {devices.length}
+            {/* 右側：設備資訊面板 (50%) - 獨立滾動 */}
+            <div className="w-1/2 h-full flex flex-col border-l border-gray-200 overflow-hidden">
+                {/* 固定的狀態欄和按鈕 */}
+                <div className="flex-shrink-0 bg-white border-b border-gray-200">
+                    {/* 狀態欄 */}
+                    <div className="px-4 py-2 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                                <span className="text-xs font-medium text-gray-700">
+                                    {wsConnected ? 'WebSocket 已連接' : 'WebSocket 未連接'}
+                                </span>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                                設備總數: {devices.length}
+                            </div>
                         </div>
                     </div>
-                    <button
-                        onClick={() => setShowCommunication(!showCommunication)}
-                        className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"
-                    >
-                        <MessageSquare className="w-3 h-3" />
-                        {showCommunication ? '隱藏通訊' : '顯示通訊'}
-                    </button>
+
+                    {/* 固定按鈕 */}
+                    <div className="px-4 py-2 flex gap-2 border-t border-gray-100">
+                        <button
+                            onClick={() => setShowCommunication(!showCommunication)}
+                            className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors ${
+                                showCommunication
+                                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                        >
+                            <MessageSquare className="w-3 h-3" />
+                            通訊
+                        </button>
+                        <button
+                            onClick={() => setShowPTTControl(!showPTTControl)}
+                            className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors ${
+                                showPTTControl
+                                    ? 'bg-purple-600 text-white hover:bg-purple-700'
+                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                        >
+                            <Radio className="w-3 h-3" />
+                            PTT
+                        </button>
+                    </div>
                 </div>
 
-                {/* 選中設備的詳細資訊 */}
-                {selectedDevice ? (
-                    <div className="flex flex-col flex-1 overflow-hidden">
-                        {/* 設備資訊卡片 */}
-                        <div className="bg-white border-b border-gray-200 p-4">
-                            <div className="flex items-start justify-between mb-3">
-                                <div>
-                                    <h3 className="text-lg font-bold text-gray-900">
-                                        {selectedDevice.callsign || selectedDevice.id}
-                                    </h3>
-                                    <p className="text-sm text-gray-500 font-mono">
-                                        {selectedDevice.id}
-                                    </p>
-                                    {selectedDevice.group && (
-                                        <p className="text-xs text-blue-600 mt-1">
-                                            群組: {selectedDevice.group}
-                                        </p>
-                                    )}
-                                </div>
-                                <div className="flex flex-col items-end gap-1">
-                                    <span
-                                        className={`text-xs px-2 py-1 rounded font-bold text-white ${selectedDevice.priority === 1
-                                            ? 'bg-red-500'
-                                            : selectedDevice.priority === 2
-                                                ? 'bg-orange-500'
-                                                : selectedDevice.priority === 3
-                                                    ? 'bg-blue-500'
-                                                    : 'bg-gray-500'
-                                            }`}
-                                    >
-                                        P{selectedDevice.priority || 3}
-                                    </span>
-                                    <span
-                                        className={`text-xs px-2 py-1 rounded ${selectedDevice.status === 'active'
-                                            ? 'bg-green-100 text-green-800'
-                                            : 'bg-gray-100 text-gray-600'
-                                            }`}
-                                    >
-                                        {selectedDevice.status === 'active' ? '在線' : '離線'}
-                                    </span>
+                {/* 主要內容區域 - 可滾動 */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {/* PTT 控制面板 */}
+                    {showPTTControl && (
+                        <div className="bg-white rounded-lg shadow-lg p-4 space-y-4">
+                            <div className="flex items-center justify-between border-b pb-3">
+                                <h3 className="text-lg font-bold flex items-center gap-2">
+                                    <Radio className="w-5 h-5 text-purple-600" />
+                                    PTT 控制面板
+                                </h3>
+                                <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                                    <span className="text-xs text-gray-600">已連接</span>
                                 </div>
                             </div>
 
-                            {/* 詳細資訊網格 */}
-                            <div className="grid grid-cols-2 gap-3 text-sm">
+                            {/* 狀態訊息 */}
+                            {pttStatus && (
+                                <div className={`p-2 rounded text-sm ${
+                                    pttStatusType === 'success' ? 'bg-green-50 text-green-800 border border-green-200' :
+                                    pttStatusType === 'error' ? 'bg-red-50 text-red-800 border border-red-200' :
+                                    'bg-blue-50 text-blue-800 border border-blue-200'
+                                }`}>
+                                    {pttStatus}
+                                </div>
+                            )}
+
+                            {/* 基本設定 */}
+                            <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <div className="text-gray-500 text-xs mb-1 flex items-center gap-1">
-                                        <MapPin className="w-3 h-3" />
-                                        位置
-                                    </div>
-                                    <div className="font-mono text-xs text-gray-800">
-                                        {selectedDevice.position.lat.toFixed(6)}, {selectedDevice.position.lng.toFixed(6)}
-                                    </div>
-                                    {selectedDevice.position.alt && (
-                                        <div className="text-xs text-gray-500">
-                                            海拔: {selectedDevice.position.alt}m
-                                        </div>
-                                    )}
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        PTT 頻道
+                                    </label>
+                                    <select
+                                        value={pttChannel}
+                                        onChange={(e) => setPttChannel(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
+                                    >
+                                        {pttChannels.map((channel) => (
+                                            <option key={channel} value={channel}>
+                                                {channel === 'emergency' ? '🆘 緊急頻道' :
+                                                 channel.startsWith('channel') ? `頻道 ${channel.slice(-1)}` :
+                                                 `📻 ${channel}`}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
 
                                 <div>
-                                    <div className="text-gray-500 text-xs mb-1 flex items-center gap-1">
-                                        <Activity className="w-3 h-3" />
-                                        類型
-                                    </div>
-                                    <div className="text-gray-800">
-                                        <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
-                                            {selectedDevice.type}
-                                        </span>
-                                    </div>
-                                    {selectedDevice.source && (
-                                        <div className="text-xs text-gray-500 mt-1">
-                                            來源: {selectedDevice.source}
-                                        </div>
-                                    )}
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        設備 ID
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={pttDeviceId}
+                                        onChange={(e) => setPttDeviceId(e.target.value)}
+                                        placeholder="USER-001"
+                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
+                                    />
                                 </div>
+                            </div>
 
-                                {selectedDevice.battery !== undefined && (
-                                    <div>
-                                        <div className="text-gray-500 text-xs mb-1">電量</div>
-                                        <div className="text-gray-800">{selectedDevice.battery}%</div>
+                            {/* GPS 發送 */}
+                            <div className="border border-gray-200 rounded p-3 space-y-2">
+                                <div className="flex items-center gap-2 text-sm font-semibold">
+                                    <MapPin className="w-4 h-4 text-green-600" />
+                                    GPS 位置發送
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                        type="text"
+                                        value={gpsLat}
+                                        onChange={(e) => setGpsLat(e.target.value)}
+                                        placeholder="緯度"
+                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={gpsLon}
+                                        onChange={(e) => setGpsLon(e.target.value)}
+                                        placeholder="經度"
+                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
+                                    />
+                                </div>
+                                <button
+                                    onClick={sendPTTGPS}
+                                    className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2"
+                                >
+                                    <MapPin className="w-4 h-4" />
+                                    發送 GPS
+                                </button>
+                            </div>
+
+                            {/* SOS 警報 */}
+                            <div className="border border-red-200 rounded p-3 space-y-2 bg-red-50">
+                                <div className="flex items-center gap-2 text-sm font-semibold text-red-700">
+                                    <AlertCircle className="w-4 h-4" />
+                                    SOS 緊急警報
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                        type="text"
+                                        value={sosLat}
+                                        onChange={(e) => setSosLat(e.target.value)}
+                                        placeholder="緯度"
+                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={sosLon}
+                                        onChange={(e) => setSosLon(e.target.value)}
+                                        placeholder="經度"
+                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
+                                    />
+                                </div>
+                                <button
+                                    onClick={sendPTTSOS}
+                                    className="w-full bg-red-600 hover:bg-red-700 text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2"
+                                >
+                                    <AlertCircle className="w-4 h-4" />
+                                    發送 SOS
+                                </button>
+                            </div>
+
+                            {/* 廣播訊息 */}
+                            <div className="border border-gray-200 rounded p-3 space-y-2">
+                                <div className="flex items-center gap-2 text-sm font-semibold">
+                                    <MessageSquare className="w-4 h-4 text-blue-600" />
+                                    廣播訊息
+                                </div>
+                                <textarea
+                                    value={broadcastMsg}
+                                    onChange={(e) => setBroadcastMsg(e.target.value)}
+                                    placeholder="輸入要廣播的訊息..."
+                                    rows={2}
+                                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded resize-none"
+                                />
+                                <button
+                                    onClick={sendPTTBroadcast}
+                                    className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2"
+                                >
+                                    <Send className="w-4 h-4" />
+                                    發送廣播
+                                </button>
+                            </div>
+
+                            {/* 錄影控制 */}
+                            <div className="border border-gray-200 rounded p-3 space-y-2">
+                                <div className="flex items-center gap-2 text-sm font-semibold">
+                                    <Video className="w-4 h-4 text-purple-600" />
+                                    錄影控制
+                                </div>
+                                <button
+                                    onClick={toggleRecording}
+                                    className={`w-full ${
+                                        isRecording 
+                                            ? 'bg-gray-600 hover:bg-gray-700' 
+                                            : 'bg-purple-600 hover:bg-purple-700'
+                                    } text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2`}
+                                >
+                                    <Video className="w-4 h-4" />
+                                    {isRecording ? '⏹️ 停止錄影' : '📹 開始錄影'}
+                                </button>
+                                {isRecording && (
+                                    <div className="flex items-center justify-center gap-2 text-red-600">
+                                        <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
+                                        <span className="text-xs font-medium">錄影中...</span>
                                     </div>
                                 )}
+                            </div>
 
-                                {selectedDevice.signal !== undefined && (
-                                    <div>
-                                        <div className="text-gray-500 text-xs mb-1 flex items-center gap-1">
-                                            <Wifi className="w-3 h-3" />
-                                            訊號
-                                        </div>
-                                        <div className="text-gray-800">{selectedDevice.signal}%</div>
-                                    </div>
-                                )}
-
-                                <div className="col-span-2">
-                                    <div className="text-gray-500 text-xs mb-1 flex items-center gap-1">
-                                        <Clock className="w-3 h-3" />
-                                        最後更新
-                                    </div>
-                                    <div className="text-xs text-gray-600">
-                                        {formatLastUpdate(selectedDevice.lastUpdate)}
-                                    </div>
+                            {/* 語音通話 (待實作) */}
+                            <div className="border border-gray-300 rounded p-3 bg-gray-50">
+                                <div className="flex items-center gap-2 text-sm font-semibold text-gray-400">
+                                    <Mic className="w-4 h-4" />
+                                    PTT 語音通話
                                 </div>
+                                <p className="text-xs text-gray-500 mt-1">功能開發中...</p>
                             </div>
                         </div>
+                    )}
 
-                        {/* 通訊面板 (可展開/收合) */}
-                        {showCommunication && (
-                            <div className="bg-white border-b border-gray-200 p-4">
-                                <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                                    <MessageSquare className="w-4 h-4" />
-                                    群組通訊
-                                </h4>
+                    {/* 通訊面板 */}
+                    {showCommunication && (
+                        <div className="bg-white rounded-lg shadow-lg p-4 space-y-4 flex flex-col h-[600px]">
+                            <div className="flex items-center justify-between border-b pb-3">
+                                <h3 className="text-lg font-bold flex items-center gap-2">
+                                    <MessageSquare className="w-5 h-5 text-blue-600" />
+                                    通訊面板
+                                </h3>
+                                <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                                    <span className="text-xs text-gray-600">已連接</span>
+                                </div>
+                            </div>
 
-                                {/* 訊息列表 */}
-                                <div className="mb-3 max-h-32 overflow-y-auto bg-gray-50 rounded p-2 space-y-2">
-                                    {relevantMessages.length === 0 ? (
-                                        <div className="text-xs text-gray-500 text-center py-2">
-                                            暫無訊息
-                                        </div>
-                                    ) : (
-                                        relevantMessages.slice(-5).map((msg) => (
+                            {/* 頻道/群組選擇器 */}
+                            <div className="space-y-2">
+                                <label className="block text-xs font-medium text-gray-700">
+                                    選擇 PTT 頻道/群組
+                                </label>
+                                <select
+                                    value={selectedGroup}
+                                    onChange={(e) => setSelectedGroup(e.target.value)}
+                                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                >
+                                    <option value="all">📢 全體廣播 (使用當前 PTT 頻道: {pttChannel})</option>
+                                    {pttChannels.map((channel) => {
+                                        const deviceCount = devices.filter(d => d.group === channel).length;
+                                        return (
+                                            <option key={channel} value={channel}>
+                                                📻 {channel} 頻道 {deviceCount > 0 ? `(${deviceCount} 人)` : ''}
+                                            </option>
+                                        );
+                                    })}
+                                </select>
+                                <div className="text-xs text-gray-500 flex items-center gap-1">
+                                    <Radio className="w-3 h-3" />
+                                    當前 PTT 設備: {pttDeviceId}
+                                </div>
+                            </div>
+
+                            {/* 訊息列表 */}
+                            <div className="flex-1 overflow-y-auto bg-gray-50 rounded-lg p-3 space-y-2 min-h-0">
+                                {relevantMessages.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                                        <MessageSquare className="w-12 h-12 mb-2" />
+                                        <p className="text-sm">尚無訊息</p>
+                                    </div>
+                                ) : (
+                                    relevantMessages.map((msg) => {
+                                        const isFromCommandCenter = msg.from === 'COMMAND_CENTER';
+                                        return (
                                             <div
                                                 key={msg.id}
-                                                className={`text-xs p-2 rounded ${msg.from === 'COMMAND_CENTER'
-                                                    ? 'bg-blue-100 ml-4'
-                                                    : 'bg-white mr-4'
-                                                    }`}
+                                                className={`flex ${isFromCommandCenter ? 'justify-end' : 'justify-start'}`}
                                             >
-                                                <div className="flex items-center justify-between mb-1">
-                                                    <span className="font-semibold text-gray-700">
-                                                        {msg.from}
-                                                    </span>
-                                                    <span className="text-gray-500">
-                                                        {formatMessageTime(msg.timestamp)}
-                                                    </span>
-                                                </div>
-                                                <div className="text-gray-800">{msg.text}</div>
-                                                {msg.to !== 'all' && (
-                                                    <div className="text-gray-500 text-xs mt-1">
-                                                        → {msg.to}
+                                                <div
+                                                    className={`max-w-[80%] rounded-lg p-3 ${
+                                                        isFromCommandCenter
+                                                            ? 'bg-blue-600 text-white'
+                                                            : 'bg-white border border-gray-200'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="text-xs font-semibold">
+                                                            {msg.from}
+                                                        </span>
+                                                        {msg.to !== 'all' && (
+                                                            <span className={`text-xs ${isFromCommandCenter ? 'text-blue-200' : 'text-gray-500'}`}>
+                                                                → {msg.to.replace('group:', '群組:').replace('device:', '')}
+                                                            </span>
+                                                        )}
                                                     </div>
-                                                )}
+                                                    <p className="text-sm">{msg.text}</p>
+                                                    <div className={`text-xs mt-1 ${isFromCommandCenter ? 'text-blue-200' : 'text-gray-500'}`}>
+                                                        {formatMessageTime(msg.timestamp)}
+                                                    </div>
+                                                </div>
                                             </div>
-                                        ))
-                                    )}
-                                </div>
+                                        );
+                                    })
+                                )}
+                                <div ref={messagesEndRef} />
+                            </div>
 
-                                {/* 收件人選擇 */}
-                                <select
-                                    value={selectedRecipient}
-                                    onChange={(e) => setSelectedRecipient(e.target.value)}
-                                    className="w-full mb-2 px-2 py-1.5 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
-                                >
-                                    <option value="all">📢 所有設備</option>
-                                    {deviceGroups.map((group) => (
-                                        <option key={group} value={`group:${group}`}>
-                                            👥 群組: {group}
-                                        </option>
-                                    ))}
-                                    {selectedDevice && (
-                                        <option value={`device:${selectedDevice.id}`}>
-                                            📱 單一設備: {selectedDevice.callsign || selectedDevice.id}
-                                        </option>
-                                    )}
-                                </select>
-
-                                {/* 訊息輸入 */}
+                            {/* 訊息輸入區 */}
+                            <div className="border-t pt-3 space-y-2">
                                 <div className="flex gap-2">
                                     <input
                                         type="text"
                                         value={messageText}
                                         onChange={(e) => setMessageText(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                                        placeholder="輸入訊息..."
-                                        className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault();
+                                                handleSendMessage();
+                                            }
+                                        }}
+                                        placeholder={
+                                            selectedGroup === 'all'
+                                                ? `發送到 PTT 頻道 ${pttChannel}...`
+                                                : `發送到頻道 ${selectedGroup}...`
+                                        }
+                                        className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                                     />
                                     <button
                                         onClick={handleSendMessage}
                                         disabled={!messageText.trim()}
-                                        className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-1"
+                                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
                                     >
                                         <Send className="w-4 h-4" />
+                                        發送
                                     </button>
                                 </div>
-                            </div>
-                        )}
-
-                        {/* 影片播放器 (如果有串流) */}
-                        {selectedDevice?.streamUrl ? (
-                            <div className="bg-gray-900 flex-1 min-h-0">
-                                <VideoPlayer
-                                    streamUrl={getFullStreamUrl(selectedDevice.streamUrl)}
-                                    cameraId={selectedDevice.id}
-                                />
-                            </div>
-                        ) : (
-                            <div className="bg-gray-900 flex-1 flex items-center justify-center">
-                                <div className="text-center text-gray-400">
-                                    <Video className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                                    <p className="text-sm">此設備無影片串流</p>
+                                <div className="text-xs text-gray-500">
+                                    按 Enter 發送，Shift+Enter 換行
                                 </div>
                             </div>
-                        )}
-                    </div>
-                ) : (
-                    <div className="flex-1 flex items-center justify-center bg-white">
-                        <div className="text-center text-gray-400">
-                            <MapPin className="w-16 h-16 mx-auto mb-3 opacity-30" />
-                            <p className="text-lg font-medium">尚未選擇設備</p>
-                            <p className="text-sm mt-1">點擊地圖上的圖標或下方列表選擇設備</p>
                         </div>
-                    </div>
-                )}
+                    )}
 
-                {/* 所有設備列表 */}
-                <div className="bg-white border-t border-gray-200 max-h-64 overflow-y-auto">
-                    <div className="p-3 border-b border-gray-100 bg-gray-50">
-                        <h4 className="text-sm font-semibold text-gray-700">所有設備 ({devices.length})</h4>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                        {devices.length === 0 ? (
-                            <div className="p-4 text-center text-sm text-gray-500">
-                                暫無設備
-                                <br />
-                                <span className="text-xs">請到 Device Management 註冊設備</span>
+                    {/* 設備資訊 */}
+                    {selectedDevice && !showPTTControl && !showCommunication && (
+                        <div className="bg-white rounded-lg shadow p-4">
+                            <h3 className="text-lg font-bold mb-3">{selectedDevice.callsign || selectedDevice.id}</h3>
+                            <div className="space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">類型:</span>
+                                    <span className="font-medium">{selectedDevice.type}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">狀態:</span>
+                                    <span className="font-medium">{selectedDevice.status}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">群組:</span>
+                                    <span className="font-medium">{selectedDevice.group || '未分組'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">最後更新:</span>
+                                    <span className="font-medium">{formatLastUpdate(selectedDevice.lastUpdate)}</span>
+                                </div>
                             </div>
-                        ) : (
-                            devices.map((device) => (
-                                <button
-                                    key={device.id}
-                                    onClick={() => handleDeviceClick(device)}
-                                    className={`w-full text-left px-3 py-2 hover:bg-blue-50 transition ${selectedDevice && selectedDevice.id === device.id
-                                        ? 'bg-blue-50 border-l-2 border-blue-500'
-                                        : ''
-                                        }`}
-                                >
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2">
-                                                <span className="font-medium text-sm text-gray-900 truncate">
-                                                    {device.callsign || device.id}
-                                                </span>
-                                                <span
-                                                    className={`text-xs px-1.5 py-0.5 rounded font-bold text-white ${device.priority === 1
-                                                        ? 'bg-red-500'
-                                                        : device.priority === 2
-                                                            ? 'bg-orange-500'
-                                                            : device.priority === 3
-                                                                ? 'bg-blue-500'
-                                                                : 'bg-gray-500'
-                                                        }`}
-                                                >
-                                                    P{device.priority || 3}
-                                                </span>
-                                                {device.group && (
-                                                    <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
-                                                        {device.group}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <div className="flex items-center gap-2 mt-1">
-                                                <span className="text-xs text-gray-500 font-mono">
-                                                    {device.id}
-                                                </span>
-                                                <span className="text-xs text-gray-400">•</span>
-                                                <span className="text-xs text-gray-500">
-                                                    {formatLastUpdate(device.lastUpdate)}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            {device.streamUrl && (
-                                                <Video className="w-4 h-4 text-blue-500" />
-                                            )}
-                                            <span
-                                                className={`w-2 h-2 rounded-full ${device.status === 'active' ? 'bg-green-500' : 'bg-gray-400'
-                                                    }`}
-                                            />
-                                        </div>
-                                    </div>
-                                </button>
-                            ))
-                        )}
-                    </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PTT 通訊系統測試工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 30px;
+        }
+
+        .panel {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .panel h2 {
+            font-size: 20px;
+            margin-bottom: 20px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .status-connected {
+            background: #10b981;
+            box-shadow: 0 0 10px #10b981;
+            animation: pulse 2s infinite;
+        }
+
+        .status-disconnected {
+            background: #ef4444;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .btn-warning:hover {
+            background: #d97706;
+        }
+
+        .log-container {
+            background: #1e293b;
+            color: #e2e8f0;
+            border-radius: 6px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 5px;
+            border-left: 3px solid transparent;
+            padding-left: 10px;
+        }
+
+        .log-info {
+            border-left-color: #3b82f6;
+            color: #93c5fd;
+        }
+
+        .log-success {
+            border-left-color: #10b981;
+            color: #6ee7b7;
+        }
+
+        .log-error {
+            border-left-color: #ef4444;
+            color: #fca5a5;
+        }
+
+        .log-warning {
+            border-left-color: #f59e0b;
+            color: #fcd34d;
+        }
+
+        .messages-container {
+            max-height: 300px;
+            overflow-y: auto;
+            background: white;
+            border-radius: 6px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .message-bubble {
+            margin-bottom: 15px;
+            display: flex;
+        }
+
+        .message-bubble.sent {
+            justify-content: flex-end;
+        }
+
+        .message-bubble.received {
+            justify-content: flex-start;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            position: relative;
+        }
+
+        .message-bubble.sent .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message-bubble.received .message-content {
+            background: #f3f4f6;
+            color: #1f2937;
+            border: 1px solid #e5e7eb;
+        }
+
+        .message-meta {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 5px;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📡 PTT 通訊系統測試工具</h1>
+            <p>測試 /WJI/PTT/* MQTT 通訊協議</p>
+        </div>
+
+        <div class="content">
+            <!-- 左側：控制面板 -->
+            <div class="panel">
+                <h2>
+                    <span class="status-indicator" id="wsStatus"></span>
+                    控制面板
+                </h2>
+
+                <div class="form-group">
+                    <label>伺服器位址</label>
+                    <input type="text" id="serverUrl" value="http://localhost:4000" />
+                </div>
+
+                <div class="form-group">
+                    <label>PTT 設備 ID (UUID)</label>
+                    <input type="text" id="deviceId" value="TEST-USER-001" />
+                </div>
+
+                <div class="form-group">
+                    <label>PTT 頻道 (Channel)</label>
+                    <select id="channel">
+                        <option value="channel1">頻道 1</option>
+                        <option value="channel2">頻道 2</option>
+                        <option value="channel3">頻道 3</option>
+                        <option value="emergency">緊急頻道</option>
+                        <option value="test">測試頻道</option>
+                    </select>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="connectWebSocket()">🔌 連接 WebSocket</button>
+                    <button class="btn btn-danger" onclick="disconnectWebSocket()">⛔ 斷開連接</button>
+                </div>
+
+                <hr style="margin: 20px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                <h3 style="margin-bottom: 15px; font-size: 16px;">📝 發送文字訊息</h3>
+                <div class="form-group">
+                    <label>訊息內容</label>
+                    <textarea id="messageText" placeholder="輸入要發送的訊息..."></textarea>
+                </div>
+                <button class="btn btn-success" onclick="sendTextMessage()">💬 發送文字訊息</button>
+
+                <hr style="margin: 20px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                <h3 style="margin-bottom: 15px; font-size: 16px;">📍 發送 GPS</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div class="form-group">
+                        <label>緯度</label>
+                        <input type="text" id="gpsLat" value="25.033964" />
+                    </div>
+                    <div class="form-group">
+                        <label>經度</label>
+                        <input type="text" id="gpsLon" value="121.564472" />
+                    </div>
+                </div>
+                <button class="btn btn-success" onclick="sendGPS()">📍 發送 GPS</button>
+
+                <hr style="margin: 20px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                <h3 style="margin-bottom: 15px; font-size: 16px;">🆘 緊急功能</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div class="form-group">
+                        <label>SOS 緯度</label>
+                        <input type="text" id="sosLat" value="25.033964" />
+                    </div>
+                    <div class="form-group">
+                        <label>SOS 經度</label>
+                        <input type="text" id="sosLon" value="121.564472" />
+                    </div>
+                </div>
+                <button class="btn btn-danger" onclick="sendSOS()">🆘 發送 SOS</button>
+
+                <hr style="margin: 20px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                <h3 style="margin-bottom: 15px; font-size: 16px;">📢 廣播訊息</h3>
+                <div class="form-group">
+                    <label>廣播內容</label>
+                    <textarea id="broadcastText" placeholder="輸入廣播訊息..."></textarea>
+                </div>
+                <button class="btn btn-warning" onclick="sendBroadcast()">📢 發送廣播</button>
+            </div>
+
+            <!-- 右側：訊息與日誌 -->
+            <div class="panel">
+                <h2>📊 即時訊息</h2>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="sentCount">0</div>
+                        <div class="stat-label">已發送</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="receivedCount">0</div>
+                        <div class="stat-label">已接收</div>
+                    </div>
+                </div>
+
+                <h3 style="margin: 20px 0 10px 0; font-size: 16px;">💬 訊息歷史</h3>
+                <div class="messages-container" id="messagesContainer">
+                    <p style="text-align: center; color: #9ca3af;">尚無訊息</p>
+                </div>
+
+                <h3 style="margin: 20px 0 10px 0; font-size: 16px;">📋 系統日誌</h3>
+                <div class="log-container" id="logContainer">
+                    <div class="log-entry log-info">系統已就緒，等待連接...</div>
+                </div>
+
+                <div style="margin-top: 15px;">
+                    <button class="btn btn-primary" onclick="clearLog()">🗑️ 清除日誌</button>
+                    <button class="btn btn-primary" onclick="testServerConnection()">🔍 測試伺服器連接</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let sentCount = 0;
+        let receivedCount = 0;
+
+        // 建立 PTT 訊息格式
+        function createPTTMessage(tag, uuid, data) {
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(uuid);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            return Array.from(combined);
+        }
+
+        // 發送 PTT 訊息到後端
+        async function publishPTT(topic, tag, data) {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const deviceId = document.getElementById('deviceId').value;
+            const message = createPTTMessage(tag, deviceId, data);
+
+            try {
+                const response = await fetch(`${serverUrl}/ptt/publish`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ topic, message, encoding: 'binary' })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    logMessage(`✅ 發送成功: ${topic}`, 'success');
+                    sentCount++;
+                    updateStats();
+                    return true;
+                } else {
+                    const error = await response.text();
+                    logMessage(`❌ 發送失敗: ${error}`, 'error');
+                    return false;
+                }
+            } catch (error) {
+                logMessage(`❌ 網路錯誤: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        // 發送文字訊息
+        async function sendTextMessage() {
+            const channel = document.getElementById('channel').value;
+            const text = document.getElementById('messageText').value;
+
+            if (!text.trim()) {
+                alert('請輸入訊息內容');
+                return;
+            }
+
+            const topic = `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`;
+            const success = await publishPTT(topic, 'TEXT_MESSAGE', text);
+
+            if (success) {
+                addMessage(text, true);
+                document.getElementById('messageText').value = '';
+            }
+        }
+
+        // 發送 GPS
+        async function sendGPS() {
+            const channel = document.getElementById('channel').value;
+            const deviceId = document.getElementById('deviceId').value;
+            const lat = document.getElementById('gpsLat').value;
+            const lon = document.getElementById('gpsLon').value;
+
+            const topic = `/WJI/PTT/${channel}/GPS`;
+            const data = `${deviceId},${lat},${lon}`;
+
+            await publishPTT(topic, 'GPS', data);
+        }
+
+        // 發送 SOS
+        async function sendSOS() {
+            const channel = document.getElementById('channel').value;
+            const lat = document.getElementById('sosLat').value;
+            const lon = document.getElementById('sosLon').value;
+
+            const topic = `/WJI/PTT/${channel}/SOS`;
+            const data = `${lat},${lon}`;
+
+            await publishPTT(topic, 'SOS', data);
+        }
+
+        // 發送廣播
+        async function sendBroadcast() {
+            const channel = document.getElementById('channel').value;
+            const text = document.getElementById('broadcastText').value;
+
+            if (!text.trim()) {
+                alert('請輸入廣播內容');
+                return;
+            }
+
+            const topic = `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`;
+            const success = await publishPTT(topic, 'BROADCAST', text);
+
+            if (success) {
+                document.getElementById('broadcastText').value = '';
+            }
+        }
+
+        // 連接 WebSocket
+        function connectWebSocket() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const wsUrl = serverUrl.replace('http', 'ws').replace(':4000', ':4001');
+
+            logMessage(`🔌 正在連接 WebSocket: ${wsUrl}`, 'info');
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                logMessage('✅ WebSocket 已連接', 'success');
+                updateConnectionStatus(true);
+                ws.send(JSON.stringify({ type: 'request_messages' }));
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'pong') return;
+
+                    logMessage(`📨 收到訊息: ${data.type}`, 'info');
+
+                    if (data.type === 'message' || data.type === 'ptt_broadcast') {
+                        const msg = data.message;
+                        addMessage(`[${msg.from}] ${msg.text}`, false);
+                        receivedCount++;
+                        updateStats();
+                    }
+
+                    if (data.type === 'messages_history') {
+                        logMessage(`📜 載入歷史訊息: ${data.messages.length} 則`, 'info');
+                    }
+                } catch (error) {
+                    logMessage(`❌ 解析錯誤: ${error.message}`, 'error');
+                }
+            };
+
+            ws.onerror = (error) => {
+                logMessage(`❌ WebSocket 錯誤`, 'error');
+                updateConnectionStatus(false);
+            };
+
+            ws.onclose = () => {
+                logMessage('🔌 WebSocket 已斷開', 'warning');
+                updateConnectionStatus(false);
+            };
+        }
+
+        // 斷開 WebSocket
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+                logMessage('⛔ 已主動斷開連接', 'info');
+            }
+        }
+
+        // 測試伺服器連接
+        async function testServerConnection() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            logMessage(`🔍 正在測試伺服器: ${serverUrl}/health`, 'info');
+
+            try {
+                const response = await fetch(`${serverUrl}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    logMessage(`✅ 伺服器正常運行`, 'success');
+                    logMessage(`📊 狀態: ${JSON.stringify(data, null, 2)}`, 'info');
+                } else {
+                    logMessage(`❌ 伺服器回應錯誤: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                logMessage(`❌ 無法連接伺服器: ${error.message}`, 'error');
+            }
+        }
+
+        // 新增訊息到介面
+        function addMessage(text, isSent) {
+            const container = document.getElementById('messagesContainer');
+
+            // 清除空狀態訊息
+            if (container.querySelector('p')) {
+                container.innerHTML = '';
+            }
+
+            const bubble = document.createElement('div');
+            bubble.className = `message-bubble ${isSent ? 'sent' : 'received'}`;
+
+            const content = document.createElement('div');
+            content.className = 'message-content';
+
+            const textDiv = document.createElement('div');
+            textDiv.textContent = text;
+
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+            meta.textContent = new Date().toLocaleTimeString('zh-TW');
+
+            content.appendChild(textDiv);
+            content.appendChild(meta);
+            bubble.appendChild(content);
+            container.appendChild(bubble);
+
+            // 自動滾動到底部
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 記錄日誌
+        function logMessage(message, type = 'info') {
+            const container = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString('zh-TW')}] ${message}`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 更新連接狀態
+        function updateConnectionStatus(connected) {
+            const indicator = document.getElementById('wsStatus');
+            indicator.className = connected ? 'status-indicator status-connected' : 'status-indicator status-disconnected';
+        }
+
+        // 更新統計數據
+        function updateStats() {
+            document.getElementById('sentCount').textContent = sentCount;
+            document.getElementById('receivedCount').textContent = receivedCount;
+        }
+
+        // 清除日誌
+        function clearLog() {
+            document.getElementById('logContainer').innerHTML = '<div class="log-entry log-info">日誌已清除</div>';
+        }
+
+        // 初始化
+        updateConnectionStatus(false);
+    </script>
+</body>
+</html>

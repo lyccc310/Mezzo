@@ -89,10 +89,20 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
 
     // Socket.io initialization
     useEffect(() => {
+        // 檢查是否需要啟用 WebRTC 功能
+        const enableWebRTC = false;  // 設為 false 禁用 WebRTC 功能
+
+        if (!enableWebRTC) {
+            console.log('ℹ️ WebRTC 功能已禁用，Communication 組件將以基本模式運行');
+            setConnectionStatus('disconnected');
+            return;
+        }
+
         socketRef.current = io(SIGNALING_SERVER, {
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionAttempts: 5,
+            timeout: 5000,  // 5秒超時
         });
 
         socketRef.current.on('connect', () => {
@@ -170,7 +180,9 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
         );
 
         return () => {
-            socketRef.current?.disconnect();
+            if (socketRef.current) {
+                socketRef.current.disconnect();
+            }
         };
     }, [currentUser.name]);
 

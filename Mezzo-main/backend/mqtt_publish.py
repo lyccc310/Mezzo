@@ -7,213 +7,117 @@ import random
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
-# MQTT Configuration
-MQTT_BROKER = "118.163.141.80"
+# ==================== 配置（與 server.cjs 一致）====================
+MQTT_BROKER = "test.mosquitto.org"  # 改成跟 server.cjs 一樣
 MQTT_PORT = 1883
 MQTT_KEEPALIVE = 60
 
-# Topics
-TOPIC_CAMERA_CONTROL = "camera/control"
-TOPIC_CAMERA_STATUS = "camera/status"
-TOPIC_CAMERA_GPS = "camera/gps"
-TOPIC_COT_MESSAGE = "cot/message"
-TOPIC_DEVICE_STATUS = "device/{}/status"
+# Topics（與 server.cjs 一致）
+TOPIC_PREFIX = "myapp"
+TOPIC_CAMERA_CONTROL = f"{TOPIC_PREFIX}/camera/control"
+TOPIC_CAMERA_STATUS = f"{TOPIC_PREFIX}/camera/status"
+TOPIC_CAMERA_GPS = f"{TOPIC_PREFIX}/camera/gps"
+TOPIC_COT_MESSAGE = f"{TOPIC_PREFIX}/cot/message"
+TOPIC_DEVICE_STATUS = f"{TOPIC_PREFIX}/device/{{}}/status"
+TOPIC_MESSAGE_BROADCAST = f"{TOPIC_PREFIX}/messages/broadcast"
 
 class MQTTPublisher:
-    def __init__(self, broker=MQTT_BROKER, port=MQTT_PORT):
-        self.broker = broker
-        self.port = port
-        self.client = mqtt.Client()
-        self.connected = False
-        
-        # Callbacks
-        self.client.on_connect = self.on_connect
-        self.client.on_disconnect = self.on_disconnect
-        self.client.on_publish = self.on_publish
-        
-    def on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
-            self.connected = True
-            print(f"✅ Connected to MQTT Broker: {self.broker}:{self.port}")
-        else:
-            print(f"❌ Failed to connect, return code {rc}")
-            
-    def on_disconnect(self, client, userdata, rc):
-        self.connected = False
-        print(f"🔌 Disconnected from MQTT Broker")
-        
-    def on_publish(self, client, userdata, mid):
-        print(f"📤 Message published (mid: {mid})")
+    # ... (保持原有程式碼)
     
-    def connect(self):
-        try:
-            self.client.connect(self.broker, self.port, MQTT_KEEPALIVE)
-            self.client.loop_start()
-            
-            # Wait for connection
-            timeout = 5
-            start_time = time.time()
-            while not self.connected and (time.time() - start_time) < timeout:
-                time.sleep(0.1)
-                
-            if not self.connected:
-                print("⚠️ Connection timeout")
-                return False
-            return True
-        except Exception as e:
-            print(f"❌ Connection error: {e}")
-            return False
-    
-    def disconnect(self):
-        self.client.loop_stop()
-        self.client.disconnect()
-    
-    def publish_camera_command(self, action, device_id="camera_1"):
-        """發布攝像頭控制指令"""
+    def publish_message(self, from_device, to_target, text, priority=3):
+        """發送訊息（新增功能，配合 server.cjs 的訊息系統）"""
         payload = {
-            "action": action,
-            "deviceId": device_id,
+            "id": f"msg-{int(time.time() * 1000)}",
+            "from": from_device,
+            "to": to_target,
+            "text": text,
+            "priority": priority,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
-        result = self.client.publish(
-            TOPIC_CAMERA_CONTROL,
-            json.dumps(payload),
-            qos=1
-        )
+        # 決定 topic
+        topic = TOPIC_MESSAGE_BROADCAST
+        if to_target.startswith('group:'):
+            group_name = to_target.replace('group:', '')
+            topic = f"{TOPIC_PREFIX}/messages/group/{group_name}"
+        elif to_target.startswith('device:'):
+            device_id = to_target.replace('device:', '')
+            topic = f"{TOPIC_PREFIX}/messages/device/{device_id}"
         
-        print(f"📸 Camera command published: {action}")
+        result = self.client.publish(topic, json.dumps(payload), qos=1)
+        print(f"💬 Message published: {from_device} → {to_target}")
         return result.is_published()
     
-    def publish_gps_update(self, lat, lon, alt=0, device_id="camera_1"):
-        """發布 GPS 位置更新"""
+    def __init__(self):
+        # 使用新版 paho-mqtt 的 Callback API
+        self.client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        
+    def connect(self):
+        """建立與 MQTT Broker 的連線"""
+        try:
+            print(f"🔄 Connecting to MQTT Broker: {MQTT_BROKER}...")
+            self.client.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
+            # 啟動背景迴圈處理網路封包
+            self.client.loop_start()
+            return True
+        except Exception as e:
+            print(f"❌ Connection failed: {e}")
+            return False
+
+    def disconnect(self):
+        """關閉連線"""
+        self.client.loop_stop()
+        self.client.disconnect()
+        
+    def publish_gps_update(self, lat, lon, alt=0, device_id="camera_1", 
+                          callsign=None, device_type="camera", group="未分組"):
+        """發布 GPS 位置更新（增強版，支援更多參數）"""
         payload = {
             "deviceId": device_id,
             "latitude": lat,
             "longitude": lon,
             "altitude": alt,
             "accuracy": 10.0,
+            "type": device_type,  # 新增
+            "callsign": callsign or device_id,  # 新增
+            "group": group,  # 新增
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
-        result = self.client.publish(
-            TOPIC_CAMERA_GPS,
-            json.dumps(payload),
-            qos=1
-        )
-        
-        print(f"📍 GPS update published: {lat}, {lon}")
+        result = self.client.publish(TOPIC_CAMERA_GPS, json.dumps(payload), qos=1)
+        print(f"📍 GPS update published: {device_id} at {lat}, {lon}")
         return result.is_published()
-    
-    def publish_device_status(self, device_id, status="active", battery=None, signal=None):
-        """發布設備狀態"""
-        payload = {
-            "deviceId": device_id,
-            "status": status,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
-        
-        if battery is not None:
-            payload["battery"] = battery
-        if signal is not None:
-            payload["signal"] = signal
-        
-        topic = TOPIC_DEVICE_STATUS.format(device_id)
-        result = self.client.publish(
-            topic,
-            json.dumps(payload),
-            qos=1
-        )
-        
-        print(f"📊 Device status published: {device_id} - {status}")
-        return result.is_published()
-    
-    def publish_cot_message(self, uid, lat, lon, alt=0, cot_type="a-f-G-U-C", 
-                           callsign="Unknown", remarks=""):
-        """發布 CoT (Cursor on Target) 消息"""
-        now = datetime.now(timezone.utc)
-        stale = datetime.fromtimestamp(now.timestamp() + 300, timezone.utc)  # 5 minutes
-        
-        cot_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
-<event version="2.0" uid="{uid}" type="{cot_type}" how="h-e" 
-       time="{now.isoformat()}" start="{now.isoformat()}" stale="{stale.isoformat()}">
-  <point lat="{lat}" lon="{lon}" hae="{alt}" ce="9999999.0" le="9999999.0"/>
-  <detail>
-    <contact callsign="{callsign}"/>
-    <remarks>{remarks}</remarks>
-    <status battery="85" />
-    <precisionlocation geopointsrc="GPS" altsrc="GPS"/>
-  </detail>
-</event>'''
-        
-        result = self.client.publish(
-            TOPIC_COT_MESSAGE,
-            cot_xml,
-            qos=1
-        )
-        
-        print(f"🎯 CoT message published: {uid} ({callsign})")
-        return result.is_published()
-    
-    def simulate_device_stream(self, device_id, lat, lon, duration=60, interval=5):
-        """模擬設備數據流"""
-        print(f"🔄 Starting device simulation: {device_id}")
-        print(f"   Duration: {duration}s, Interval: {interval}s")
-        
-        start_time = time.time()
-        count = 0
-        
-        while (time.time() - start_time) < duration:
-            # Random walk
-            lat += random.uniform(-0.0001, 0.0001)
-            lon += random.uniform(-0.0001, 0.0001)
-            alt = random.uniform(0, 100)
-            
-            battery = max(0, 100 - count * 2)
-            signal = random.randint(60, 100)
-            
-            # Publish GPS
-            self.publish_gps_update(lat, lon, alt, device_id)
-            
-            # Publish status
-            status = "active" if battery > 20 else "warning"
-            self.publish_device_status(device_id, status, battery, signal)
-            
-            # Publish CoT
-            self.publish_cot_message(
-                uid=device_id,
-                lat=lat,
-                lon=lon,
-                alt=alt,
-                callsign=f"Device-{device_id}",
-                remarks=f"Simulated device at iteration {count}"
-            )
-            
-            count += 1
-            print(f"   Iteration {count}: Position updated")
-            time.sleep(interval)
-        
-        print(f"✅ Simulation completed: {count} iterations")
-
 
 def main():
-    parser = argparse.ArgumentParser(description='MQTT Publisher for CivTAK/ATAK Integration')
+    parser = argparse.ArgumentParser(description='MQTT Publisher for Mezzo TAK Integration')
     parser.add_argument('command', nargs='?', default='status',
-                       help='Command: left, right, capture, status, gps, cot, simulate')
+                       help='Command: left, right, capture, status, gps, cot, simulate, message')
     parser.add_argument('--device-id', default='camera_1',
                        help='Device ID (default: camera_1)')
-    parser.add_argument('--lat', type=float, default=24.993861,
-                       help='Latitude (default: 24.993861)')
-    parser.add_argument('--lon', type=float, default=121.2995,
-                       help='Longitude (default: 121.2995)')
+    parser.add_argument('--lat', type=float, default=25.033964,
+                       help='Latitude (default: 25.033964 - 台北101)')
+    parser.add_argument('--lon', type=float, default=121.564472,
+                       help='Longitude (default: 121.564472 - 台北101)')
     parser.add_argument('--alt', type=float, default=0,
                        help='Altitude (default: 0)')
-    parser.add_argument('--callsign', default='Unknown',
-                       help='Callsign for CoT message')
+    parser.add_argument('--callsign', default=None,
+                       help='Callsign for device')
+    parser.add_argument('--group', default='未分組',
+                       help='Group name (default: 未分組)')
+    parser.add_argument('--type', default='camera',
+                       help='Device type (default: camera)')
     parser.add_argument('--duration', type=int, default=60,
                        help='Simulation duration in seconds (default: 60)')
     parser.add_argument('--interval', type=int, default=5,
                        help='Simulation interval in seconds (default: 5)')
+    
+    # 訊息相關參數
+    parser.add_argument('--to', default='all',
+                       help='Message recipient: all, group:NAME, device:ID')
+    parser.add_argument('--text', default='Test message',
+                       help='Message text')
+    parser.add_argument('--priority', type=int, default=3,
+                       help='Message priority (1-5, default: 3)')
     
     args = parser.parse_args()
     
@@ -239,7 +143,11 @@ def main():
             
         elif args.command == 'gps':
             publisher.publish_gps_update(
-                args.lat, args.lon, args.alt, args.device_id
+                args.lat, args.lon, args.alt, 
+                device_id=args.device_id,
+                callsign=args.callsign,
+                device_type=args.type,
+                group=args.group
             )
             
         elif args.command == 'cot':
@@ -248,7 +156,16 @@ def main():
                 lat=args.lat,
                 lon=args.lon,
                 alt=args.alt,
-                callsign=args.callsign
+                callsign=args.callsign or args.device_id
+            )
+        
+        # 新增：訊息功能
+        elif args.command == 'message':
+            publisher.publish_message(
+                from_device=args.device_id,
+                to_target=args.to,
+                text=args.text,
+                priority=args.priority
             )
             
         elif args.command == 'simulate':
@@ -262,9 +179,8 @@ def main():
             
         else:
             print(f"⚠️ Unknown command: {args.command}")
-            print("Available commands: left, right, capture, status, gps, cot, simulate")
+            print("Available commands: left, right, capture, status, gps, cot, message, simulate")
         
-        # Wait a bit for messages to be sent
         time.sleep(1)
         
     except KeyboardInterrupt:
@@ -275,14 +191,5 @@ def main():
         publisher.disconnect()
         print("👋 Disconnected")
 
-
 if __name__ == "__main__":
-    # For backward compatibility with simple command line usage
-    if len(sys.argv) == 2 and sys.argv[1] in ['left', 'right', 'capture']:
-        publisher = MQTTPublisher()
-        if publisher.connect():
-            publisher.publish_camera_command(sys.argv[1])
-            time.sleep(1)
-            publisher.disconnect()
-    else:
-        main()
+    main()

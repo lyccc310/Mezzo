@@ -108,12 +108,14 @@ const Device = () => {
   const [formData, setFormData] = useState({
     streamId: '',
     callsign: '',
-    streamType: 'rtsp',
-    rtspUrl: '',
+    streamType: 'rtsp',  // 'rtsp', 'http', 'mjpeg'
+    streamUrl: '',       // 統一使用 streamUrl
     lat: '25.0338',
     lon: '121.5646',
     alt: '0',
     priority: '3',
+    group: 'Cameras',
+    directStream: true,  // 預設使用直接串流（MJPEG 不轉換）
   });
 
   // 取得 NVR Server Info
@@ -198,87 +200,52 @@ const Device = () => {
     setRegisterMessage(null);
 
     try {
-      if (formData.streamType === 'rtsp') {
-        // 註冊 RTSP 攝像頭
-        // ==========================================
-        // 情況 A: RTSP 攝像頭 (交給後端處理)
-        // ==========================================
-        
-        // 1. 呼叫後端註冊 API
-        // 後端會自動產生 CoT 並帶有 <__video> 標籤發送給 WinTAK
-        const response = await fetch('http://localhost:4000/api/rtsp/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            streamId: formData.streamId,
-            rtspUrl: formData.rtspUrl,
-            position: {
-              lat: parseFloat(formData.lat),
-              lon: parseFloat(formData.lon),
-              alt: parseFloat(formData.alt),
-            },
-            priority: parseInt(formData.priority),
-            callsign: formData.callsign || formData.streamId,
-            // 可以在這裡帶入 group 參數
-            group: 'Cameras' 
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || '註冊失敗');
-        }
-
-        // ⚠️ 修正：這裡 "不要" 再手動呼叫 /send-cot
-        // 因為後端已經送出過一次 "完美的" CoT (包含影片連結)
-        // 如果這裡再送一次，會把原本的影片連結覆蓋掉
-
-        setRegisterMessage({
-          type: 'success',
-          text: '✅ RTSP 攝像頭註冊成功！WinTAK 應已出現攝影機圖示。',
-        });
-
-      } else {
-        // ==========================================
-        // 情況 B: MJPEG 或其他類型 (前端手動發送)
-        // ==========================================
-        const response = await fetch('http://localhost:4000/send-cot', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            uid: formData.streamId,
-            // 建議改用 b-m-p-s-p-loc (感測器/攝影機) 而不是 a-f-G (友軍)
-            type: 'b-m-p-s-p-loc', 
+      // 統一使用後端的串流註冊 API，支援 RTSP 和 HTTP/MJPEG
+      const response = await fetch('http://localhost:4000/api/rtsp/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          streamId: formData.streamId,
+          streamUrl: formData.streamUrl,  // 統一使用 streamUrl
+          position: {
             lat: parseFloat(formData.lat),
             lon: parseFloat(formData.lon),
-            hae: parseFloat(formData.alt),
-            callsign: formData.callsign || formData.streamId,
-            // 將 MJPEG 網址放入 remarks，方便在 WinTAK 查看
-            remarks: `MJPEG Stream: ${formData.rtspUrl}`,
-          }),
-        });
+            alt: parseFloat(formData.alt),
+          },
+          priority: parseInt(formData.priority),
+          callsign: formData.callsign || formData.streamId,
+          group: formData.group || 'Cameras',
+          directStream: formData.directStream,  // 是否使用直接串流
+        }),
+      });
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || '註冊失敗');
-        }
-
-        setRegisterMessage({
-          type: 'success',
-          text: '✅ MJPEG 設備已發送訊號至 WinTAK！',
-        });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || '註冊失敗');
       }
+
+      const result = await response.json();
+      const streamTypeText = formData.streamType === 'rtsp' ? 'RTSP' : 'HTTP/MJPEG';
+
+      setRegisterMessage({
+        type: 'success',
+        text: `✅ ${streamTypeText} 串流註冊成功！${result.message || '設備已加入系統'}`,
+      });
+
+      console.log('註冊成功，返回資料:', result);
 
       // 重置表單
       setFormData({
         streamId: '',
         callsign: '',
         streamType: 'rtsp',
-        rtspUrl: '',
+        streamUrl: '',
         lat: '25.0338',
         lon: '121.5646',
         alt: '0',
         priority: '3',
+        group: 'Cameras',
+        directStream: true,
       });
 
       // 3 秒後清除訊息並重新載入列表
@@ -467,14 +434,14 @@ const Device = () => {
                     <label className="flex items-center cursor-pointer">
                       <input
                         type="radio"
-                        value="mjpeg"
-                        checked={formData.streamType === 'mjpeg'}
+                        value="http"
+                        checked={formData.streamType === 'http'}
                         onChange={(e) =>
                           setFormData({ ...formData, streamType: e.target.value })
                         }
                         className="mr-2"
                       />
-                      <span className="font-medium">MJPEG 串流</span>
+                      <span className="font-medium">HTTP/MJPEG 串流</span>
                     </label>
                   </div>
 
@@ -515,22 +482,27 @@ const Device = () => {
                     {/* 串流 URL */}
                     <div className="col-span-2">
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        {formData.streamType === 'rtsp' ? 'RTSP URL *' : 'MJPEG URL *'}
+                        {formData.streamType === 'rtsp' ? 'RTSP URL *' : 'HTTP/MJPEG URL *'}
                       </label>
                       <input
                         type="text"
                         required
                         placeholder={
                           formData.streamType === 'rtsp'
-                            ? 'rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4'
-                            : 'http://example.com/mjpeg_stream.cgi'
+                            ? 'rtsp://admin:1234@192.168.1.100:554/stream1'
+                            : 'http://118.163.141.80:80/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=0'
                         }
-                        value={formData.rtspUrl}
+                        value={formData.streamUrl}
                         onChange={(e) =>
-                          setFormData({ ...formData, rtspUrl: e.target.value })
+                          setFormData({ ...formData, streamUrl: e.target.value })
                         }
                         className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {formData.streamType === 'rtsp'
+                          ? '支援 RTSP 協議的攝像頭串流 URL'
+                          : '支援 HTTP MJPEG 串流，例如 IP 攝像頭的 MJPEG 端點'}
+                      </p>
                     </div>
 
                     {/* 緯度 */}
@@ -594,7 +566,48 @@ const Device = () => {
                         <option value="4">P4 - 低</option>
                       </select>
                     </div>
+
+                    {/* 群組 */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        群組
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Cameras"
+                        value={formData.group}
+                        onChange={(e) =>
+                          setFormData({ ...formData, group: e.target.value })
+                        }
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
                   </div>
+
+                  {/* 串流模式選項 (僅 HTTP/MJPEG 顯示) */}
+                  {formData.streamType === 'http' && (
+                    <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.directStream}
+                          onChange={(e) =>
+                            setFormData({ ...formData, directStream: e.target.checked })
+                          }
+                          className="mr-2 w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-700">
+                            使用直接串流（推薦）
+                          </span>
+                          <p className="text-xs text-gray-600 mt-1">
+                            ✅ MJPEG 可直接顯示，無需轉換，立即可用<br/>
+                            ❌ 取消勾選將使用 FFmpeg 轉換為 HLS（需等待數秒）
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                  )}
 
                   {/* 提交按鈕 */}
                   <button

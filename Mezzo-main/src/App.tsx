@@ -475,7 +475,10 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript }: { teamStatus: Team
         {/* Right Column - GPS Tracking */}
         <div className="col-span-1">
           <div className="bg-white rounded-lg shadow-sm">
-            <CameraMap />
+            <CameraMap
+              devices={[]}
+              onDeviceSelect={() => {}}
+            />
           </div>
           {/* Team Status */}
           <div className="bg-white rounded-lg shadow-sm mt-4">
@@ -535,11 +538,11 @@ export default function App() {
   const [activeMenu, setActiveMenu] = useState('Dashboard');
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [teamStatus, setTeamStatus] = useState<TeamMember[]>([
-    { id: 1, name: 'Officer Rodriguez', unit: 'Patrol Unit 7A', status: 'Live', color: 'red' },
-    { id: 2, name: 'Officer Santos', unit: 'Patrol Unit 5B', status: 'Active', color: 'green' },
-    { id: 3, name: 'Officer Dela Cruz', unit: 'Dispatch', status: 'Active', color: 'green' },
-    { id: 4, name: 'Officer Garcia', unit: 'Patrol Unit 3C', status: 'Offline', color: 'gray' },
-    { id: 5, name: 'Officer Ramos', unit: 'Patrol Unit 2D', status: 'Active', color: 'green' },
+    { id: '1', name: 'Officer Rodriguez', unit: 'Patrol Unit 7A', status: 'Live', color: 'red' },
+    { id: '2', name: 'Officer Santos', unit: 'Patrol Unit 5B', status: 'Active', color: 'green' },
+    { id: '3', name: 'Officer Dela Cruz', unit: 'Dispatch', status: 'Active', color: 'green' },
+    { id: '4', name: 'Officer Garcia', unit: 'Patrol Unit 3C', status: 'Offline', color: 'gray' },
+    { id: '5', name: 'Officer Ramos', unit: 'Patrol Unit 2D', status: 'Active', color: 'green' },
   ]);
 
 
@@ -547,7 +550,7 @@ export default function App() {
     setUserName(name);
     setUserUnit(unit);
     setIsLoggedIn(true);
-    setTeamStatus((prev) => [{ id: 1, name, unit, status: 'Live', color: 'red' }, ...prev.slice(1)]);
+    setTeamStatus((prev) => [{ id: '1', name, unit, status: 'Live', color: 'red' }, ...prev.slice(1)]);
   };
 
   const handleTranscript = (entry: Transcript) => {
