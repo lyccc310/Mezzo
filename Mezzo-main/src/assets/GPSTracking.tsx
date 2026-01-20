@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import CameraMap from './CameraMap';
 import VideoPlayer from './VideoPlayer';
+import PTTAudio from './PTTAudio';
 import { getFullStreamUrl } from '../config/api';
-import { Device, Message } from '../types'; 
+import { Device, Message } from '../types';
 import { MapPin, Video, Wifi, Activity, Clock, Send, Users, MessageSquare, Radio, AlertCircle, Mic } from 'lucide-react';
 
 // ===== 配置 =====
@@ -263,6 +264,62 @@ const GPSTracking: React.FC = () => {
         } catch (error) {
             console.error('❌ Toggle PTT Recording error:', error);
             showPTTStatus('❌ 錄影控制失敗', 'error');
+        }
+    };
+
+    // ===== 音訊發送函數 =====
+    const handleAudioSend = async (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string) => {
+        try {
+            // 將音訊數據轉換為數組
+            const audioArray = Array.from(new Uint8Array(audioData));
+
+            let topic: string;
+            let tag: string;
+
+            if (isPrivate && targetId) {
+                // 私人通話
+                topic = `/WJI/PTT/${pttChannel}/PRIVATE/${targetId}`;
+                tag = 'PRIVATE_AUDIO';
+            } else {
+                // 群組語音
+                topic = `/WJI/PTT/${pttChannel}/SPEECH`;
+                tag = 'SPEECH_AUDIO';
+            }
+
+            // 創建 PTT 訊息（Tag + UUID + AudioData）
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(pttDeviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const audioBytes = new Uint8Array(audioData);
+            const combined = new Uint8Array(160 + audioBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(audioBytes, 160);
+
+            const message = Array.from(combined);
+
+            // 發送到後端
+            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, message, encoding: 'binary' })
+            });
+
+            if (response.ok) {
+                const typeText = isPrivate ? '📞 私人通話' : '🎙️ 群組語音';
+                showPTTStatus(`${typeText} 已發送 (${audioData.byteLength} bytes)`, 'success');
+                console.log(`${typeText} sent:`, { topic, size: audioData.byteLength });
+            } else {
+                throw new Error('Failed to send audio');
+            }
+        } catch (error) {
+            console.error('❌ Send audio error:', error);
+            showPTTStatus('❌ 音訊發送失敗', 'error');
         }
     };
 
@@ -850,14 +907,12 @@ const GPSTracking: React.FC = () => {
                                 )}
                             </div>
 
-                            {/* 語音通話 (待實作) */}
-                            <div className="border border-gray-300 rounded p-3 bg-gray-50">
-                                <div className="flex items-center gap-2 text-sm font-semibold text-gray-400">
-                                    <Mic className="w-4 h-4" />
-                                    PTT 語音通話
-                                </div>
-                                <p className="text-xs text-gray-500 mt-1">功能開發中...</p>
-                            </div>
+                            {/* PTT 語音通話 */}
+                            <PTTAudio
+                                deviceId={pttDeviceId}
+                                channel={pttChannel}
+                                onAudioSend={handleAudioSend}
+                            />
                         </div>
                     )}
 

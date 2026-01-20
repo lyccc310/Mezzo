@@ -714,6 +714,86 @@ function handlePTT_MARK(channel, uuid, tag, data) {
     console.error('❌ PTT MARK handler error:', error);
   }
 }
+
+/**
+ * 處理 PTT SPEECH (群組語音)
+ */
+function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
+  try {
+    console.log('🎙️ [PTT SPEECH]', {
+      channel,
+      uuid,
+      tag,
+      audioSize: audioBuffer.length
+    });
+
+    // 建立音訊封包事件
+    const audioPacket = {
+      id: `speech-${uuid}-${Date.now()}`,
+      type: 'speech',
+      channel: channel,
+      from: uuid,
+      timestamp: new Date().toISOString(),
+      audioData: audioBuffer.toString('base64'),  // 轉為 base64 傳輸
+      tag: tag
+    };
+
+    // 廣播到所有連接的客戶端（群組語音）
+    broadcastToClients({
+      type: 'ptt_audio',
+      packet: audioPacket
+    });
+
+    console.log(`🎙️ SPEECH broadcasted: ${uuid} → ${channel} (${audioBuffer.length} bytes)`);
+
+  } catch (error) {
+    console.error('❌ PTT SPEECH handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT PRIVATE (私人語音)
+ */
+function handlePTT_PRIVATE(topic, channel, uuid, tag, audioBuffer) {
+  try {
+    // 從 topic 中提取 RandomID
+    // 格式: /WJI/PTT/{Channel}/PRIVATE/{RandomID}
+    const parts = topic.split('/');
+    const randomId = parts[parts.length - 1];
+
+    console.log('📞 [PTT PRIVATE]', {
+      channel,
+      uuid,
+      randomId,
+      tag,
+      audioSize: audioBuffer.length
+    });
+
+    // 建立私人音訊封包事件
+    const audioPacket = {
+      id: `private-${uuid}-${Date.now()}`,
+      type: 'private',
+      channel: channel,
+      randomId: randomId,  // 私人通話的唯一 ID
+      from: uuid,
+      timestamp: new Date().toISOString(),
+      audioData: audioBuffer.toString('base64'),
+      tag: tag
+    };
+
+    // 廣播到所有客戶端（客戶端需要根據 randomId 過濾）
+    broadcastToClients({
+      type: 'ptt_audio',
+      packet: audioPacket
+    });
+
+    console.log(`📞 PRIVATE broadcasted: ${uuid} → ${randomId} (${audioBuffer.length} bytes)`);
+
+  } catch (error) {
+    console.error('❌ PTT PRIVATE handler error:', error);
+  }
+}
+
 // ==================== RTSP 串流管理器 ====================
 
 class StreamManager {
@@ -1030,13 +1110,11 @@ pttMqttClient.on('message', (topic, message) => {
         break;
 
       case 'SPEECH':
-        console.log('🎙️ [PTT SPEECH] Audio data received (not implemented yet)');
-        // TODO: 音訊處理
+        handlePTT_SPEECH(channel, uuid, tag, buffer.slice(160));
         break;
 
       case 'PRIVATE':
-        console.log('📞 [PTT PRIVATE] Private call (not implemented yet)');
-        // TODO: 私人通話處理
+        handlePTT_PRIVATE(topic, channel, uuid, tag, buffer.slice(160));
         break;
 
       default:
