@@ -554,7 +554,8 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             // 過濾掉無效的 GPS 座標 (0,0) 避免洗版
                             const isValidGPS = device.position.lat !== 0 || device.position.lng !== 0;
 
-                            if (isValidGPS) {
+                            // 跳過自己發送的 GPS 更新（避免重複顯示，因為 sendPTTGPS 已經添加過本地通知）
+                            if (isValidGPS && device.id !== pttDeviceId) {
                                 const gpsNotification: Message = {
                                     id: `gps-update-${Date.now()}`,
                                     from: device.id,
@@ -564,8 +565,10 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                     priority: 3
                                 };
                                 setMessages((prev) => [...prev, gpsNotification]);
-                            } else {
+                            } else if (!isValidGPS) {
                                 console.log('⏭️ Skipping invalid GPS update (0,0) from', device.id);
+                            } else {
+                                console.log('⏭️ Skipping own GPS update from', pttDeviceId);
                             }
                         }
 
