@@ -325,16 +325,22 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
             const message = Array.from(combined);
 
-            // 發送到後端（包含轉錄文字）
+            // 發送到後端（只有語音訊息才包含轉錄文字）
+            const requestBody: any = {
+                topic,
+                message,
+                encoding: 'binary'
+            };
+
+            // 只在有實際轉錄內容時才加入 transcript 參數（語音訊息），群組 PTT 不加入
+            if (transcript && transcript.trim()) {
+                requestBody.transcript = transcript;
+            }
+
             const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    topic,
-                    message,
-                    encoding: 'binary',
-                    transcript: transcript || ''  // 新增轉錄文字
-                })
+                body: JSON.stringify(requestBody)
             });
 
             if (response.ok) {
@@ -791,7 +797,9 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                 recognition.onresult = (event: any) => {
                     for (let i = event.resultIndex; i < event.results.length; i++) {
                         if (event.results[i].isFinal) {
-                            transcript += event.results[i][0].transcript + ' ';
+                            const newText = event.results[i][0].transcript;
+                            transcript += newText + ' ';
+                            console.log('🎤 Speech recognized:', newText, '| Total:', transcript);
                         }
                     }
                 };
@@ -800,8 +808,19 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                     console.warn('⚠️ Speech recognition error:', event.error);
                 };
 
+                recognition.onstart = () => {
+                    console.log('🎤 Speech recognition started for voice message');
+                };
+
+                recognition.onend = () => {
+                    console.log('🎤 Speech recognition ended. Final transcript:', transcript);
+                };
+
                 voiceMsgRecognitionRef.current = { recognition, transcript: () => transcript };
                 recognition.start();
+                console.log('🎤 Voice message recording started with speech recognition');
+            } else {
+                console.warn('⚠️ Speech recognition not supported in this browser');
             }
 
             voiceMsgRecorderRef.current = mediaRecorder;
@@ -834,6 +853,13 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                 const transcript = voiceMsgRecognitionRef.current?.transcript() || '';
                 const displayText = transcript.trim() || '語音訊息';
 
+                console.log('📝 Voice message transcript:', {
+                    raw: transcript,
+                    trimmed: transcript.trim(),
+                    displayText,
+                    hasRecognition: !!voiceMsgRecognitionRef.current
+                });
+
                 // 決定頻道
                 let channel = pttChannel;
                 if (selectedGroup !== 'all') {
@@ -846,6 +872,15 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                     audioData: base64Audio,
                     transcript: transcript
                 };
+
+                console.log('📤 Sending voice message:', {
+                    channel,
+                    from: pttDeviceId,
+                    to: selectedGroup === 'all' ? 'all' : `group:${selectedGroup}`,
+                    textLength: voiceMessageData.text.length,
+                    hasAudio: !!base64Audio,
+                    transcriptLength: transcript.length
+                });
 
                 // 發送到後端
                 const response = await fetch(`${API_CONFIG.baseUrl}/ptt/voice-message`, {
@@ -861,7 +896,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
                 if (response.ok) {
                     // 不需要本地顯示，後端會透過 WebSocket 廣播回來
-                    showPTTStatus(`✅ 語音訊息已發送`, 'success');
+                    showPTTStatus(`✅ 語音訊息已發送 ${transcript ? `(含文字: ${displayText.substring(0, 20)}...)` : '(純音訊)'}`, 'success');
                     console.log('📤 Voice message sent, waiting for WebSocket broadcast...');
                 } else {
                     showPTTStatus('❌ 發送語音訊息失敗', 'error');

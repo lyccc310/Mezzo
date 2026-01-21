@@ -394,19 +394,9 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 const arrayBuffer = await audioBlob.arrayBuffer();
 
-                // 使用當前顯示的文字（包含最終和臨時結果）
-                // 因為有時候語音識別還沒來得及標記為 final 就被停止了
-                const textToSend = currentTranscript || finalTranscriptRef.current;
-                console.log('📝 Sending audio with transcript:', {
-                    currentTranscript,
-                    finalTranscript: finalTranscriptRef.current,
-                    willSend: textToSend || '(empty)'
-                });
-                onAudioSend(arrayBuffer, false, undefined, textToSend);
-
-                // 清空轉錄文字
-                setCurrentTranscript('');
-                finalTranscriptRef.current = '';
+                // 群組通話：不發送轉譯文字，只發送音訊
+                console.log('📝 Sending group PTT audio (no transcript)');
+                onAudioSend(arrayBuffer, false, undefined, undefined);
 
                 // 清理
                 audioChunksRef.current = [];
@@ -420,30 +410,8 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             setIsRecording(true);
             isRecordingRef.current = true;
 
-            // 啟動語音識別
-            if (recognitionRef.current) {
-                try {
-                    // 先嘗試停止（如果正在運行）
-                    if (speechRecognitionEnabled) {
-                        recognitionRef.current.stop();
-                    }
-                    // 等待一下再啟動
-                    setTimeout(() => {
-                        try {
-                            recognitionRef.current.start();
-                            console.log('🎤 Starting speech recognition...');
-                        } catch (err) {
-                            console.warn('⚠️ Speech recognition start failed:', err);
-                        }
-                    }, 100);
-                } catch (err) {
-                    console.warn('⚠️ Speech recognition stop failed:', err);
-                }
-            } else {
-                console.warn('⚠️ Speech recognition not initialized');
-            }
-
-            console.log('🎙️ Started group recording');
+            // 群組通話不啟動語音識別（即時對講，不需要轉譯）
+            console.log('🎙️ Started group PTT recording (no speech recognition)');
 
         } catch (error) {
             console.error('❌ Failed to start recording:', error);
@@ -460,15 +428,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             setAudioLevel(0);
             setHasPermission(false);  // 釋放麥克風權限
 
-            // 停止語音識別
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.stop();
-                    console.log('🎤 Speech recognition stopped');
-                } catch (err) {
-                    console.warn('⚠️ Speech recognition stop failed:', err);
-                }
-            }
+            // 群組通話不使用語音識別，不需要停止
 
             // 清除靜音計時器
             if (silenceTimerRef.current) {
@@ -739,13 +699,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                         </div>
                     )}
 
-                    {/* 即時轉錄文字顯示 */}
-                    {isRecording && currentTranscript && (
-                        <div className="bg-blue-50 border border-blue-200 rounded p-2">
-                            <div className="text-xs text-gray-600 mb-1">正在識別:</div>
-                            <div className="text-sm text-blue-900 italic">{currentTranscript}</div>
-                        </div>
-                    )}
+                    {/* 群組通話不顯示即時轉錄（即時對講不需要轉譯） */}
 
                     {/* 靜音按鈕 */}
                     <button
