@@ -436,6 +436,14 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                     console.log('✅ WebSocket connected');
                     setWsConnected(true);
                     reconnectAttemptsRef.current = 0;
+
+                    // 註冊設備 ID（用於私人通話）
+                    ws.send(JSON.stringify({
+                        type: 'register_device',
+                        deviceId: pttDeviceId
+                    }));
+                    console.log(`📱 Registering device: ${pttDeviceId}`);
+
                     ws.send(JSON.stringify({ type: 'request_devices' }));
 
                     const heartbeat = setInterval(() => {

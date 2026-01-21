@@ -100,7 +100,8 @@ const pttState = {
   activeUsers: new Map(),      // 活躍的 PTT 使用者
   sosAlerts: new Map(),        // SOS 警報
   channelUsers: new Map(),     // 各頻道的使用者
-  broadcastedTranscripts: new Set()  // 追蹤已廣播的轉錄訊息 (避免重複)
+  broadcastedTranscripts: new Set(),  // 追蹤已廣播的轉錄訊息 (避免重複)
+  deviceConnections: new Map()  // 設備 ID → WebSocket 連線對應表（用於私人通話）
 };
 
 // 確保 streams 目錄存在
@@ -767,15 +768,15 @@ function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
  */
 function handlePTT_PRIVATE(topic, channel, uuid, tag, audioBuffer) {
   try {
-    // 從 topic 中提取 RandomID
-    // 格式: /WJI/PTT/{Channel}/PRIVATE/{RandomID}
+    // 從 topic 中提取目標設備 ID
+    // 格式: /WJI/PTT/{Channel}/PRIVATE/{TargetDeviceId}
     const parts = topic.split('/');
-    const randomId = parts[parts.length - 1];
+    const targetDeviceId = parts[parts.length - 1];
 
     console.log('📞 [PTT PRIVATE]', {
       channel,
-      uuid,
-      randomId,
+      from: uuid,
+      to: targetDeviceId,
       tag,
       audioSize: audioBuffer.length
     });
@@ -785,23 +786,125 @@ function handlePTT_PRIVATE(topic, channel, uuid, tag, audioBuffer) {
       id: `private-${uuid}-${Date.now()}`,
       type: 'private',
       channel: channel,
-      randomId: randomId,  // 私人通話的唯一 ID
       from: uuid,
+      to: targetDeviceId,  // 目標設備 ID
       timestamp: new Date().toISOString(),
       audioData: audioBuffer.toString('base64'),
       tag: tag
     };
 
-    // 廣播到所有客戶端（客戶端需要根據 randomId 過濾）
-    broadcastToClients({
-      type: 'ptt_audio',
-      packet: audioPacket
-    });
+    // 只發給目標設備（點對點）
+    const targetWs = pttState.deviceConnections.get(targetDeviceId);
+    const senderWs = pttState.deviceConnections.get(uuid);
 
-    console.log(`📞 PRIVATE broadcasted: ${uuid} → ${randomId} (${audioBuffer.length} bytes)`);
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify({
+        type: 'ptt_audio',
+        packet: audioPacket
+      }));
+      console.log(`📞 PRIVATE sent to target: ${uuid} → ${targetDeviceId}`);
+    } else {
+      console.log(`⚠️ Target device ${targetDeviceId} not connected`);
+    }
+
+    // 也發給發送者自己（讓發送者知道音訊已發送）
+    if (senderWs && senderWs.readyState === WebSocket.OPEN && uuid !== targetDeviceId) {
+      senderWs.send(JSON.stringify({
+        type: 'ptt_audio',
+        packet: audioPacket
+      }));
+      console.log(`📞 PRIVATE echo to sender: ${uuid}`);
+    }
 
   } catch (error) {
     console.error('❌ PTT PRIVATE handler error:', error);
+  }
+}
+
+/**
+ * 處理私人通話請求 (握手)
+ */
+function handlePTT_PrivateRequest(channel, uuid, data) {
+  try {
+    // Data 格式: "TargetUUID,PrivateTopicID"
+    const [targetUUID, privateTopicID] = data.split(',');
+
+    console.log('📞 [PRIVATE_SPK_REQ]', {
+      from: uuid,
+      to: targetUUID,
+      privateTopicID: privateTopicID
+    });
+
+    // 建立通話請求訊息
+    const callRequest = {
+      type: 'private_call_request',
+      from: uuid,
+      to: targetUUID,
+      privateTopicID: privateTopicID,
+      channel: channel,
+      timestamp: new Date().toISOString()
+    };
+
+    // 只發給目標設備
+    const targetWs = pttState.deviceConnections.get(targetUUID);
+    const senderWs = pttState.deviceConnections.get(uuid);
+
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify(callRequest));
+      console.log(`📞 Private call request sent: ${uuid} → ${targetUUID} (Topic: ${privateTopicID})`);
+    } else {
+      console.log(`⚠️ Target device ${targetUUID} not connected`);
+    }
+
+    // 通知發送者請求已發送
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      senderWs.send(JSON.stringify({
+        type: 'private_call_request_sent',
+        to: targetUUID,
+        privateTopicID: privateTopicID
+      }));
+    }
+
+  } catch (error) {
+    console.error('❌ PTT PRIVATE_SPK_REQ handler error:', error);
+  }
+}
+
+/**
+ * 處理私人通話結束
+ */
+function handlePTT_PrivateStop(channel, uuid, data) {
+  try {
+    const targetUUID = data.trim();
+
+    console.log('📞 [PRIVATE_SPK_STOP]', {
+      channel: channel,
+      from: uuid,
+      to: targetUUID
+    });
+
+    // 通知雙方結束通話
+    const targetWs = pttState.deviceConnections.get(targetUUID);
+    const senderWs = pttState.deviceConnections.get(uuid);
+
+    const stopMessage = {
+      type: 'private_call_stop',
+      from: uuid,
+      to: targetUUID,
+      timestamp: new Date().toISOString()
+    };
+
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify(stopMessage));
+      console.log(`📞 Private call stopped: ${uuid} → ${targetUUID}`);
+    }
+
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      senderWs.send(JSON.stringify(stopMessage));
+    }
+
+  } catch (error) {
+    console.error('❌ PTT PRIVATE_SPK_STOP handler error:', error);
   }
 }
 
@@ -1107,9 +1210,12 @@ pttMqttClient.on('message', (topic, message) => {
         } else if (tag.includes('PTT_MSG_TYPE_SPEECH')) {
           console.log('🎙️ [PTT SPEECH CONTROL]', tag);
           // TODO: 語音控制處理
+        } else if (tag === 'PRIVATE_SPK_REQ') {
+          handlePTT_PrivateRequest(channel, uuid, data);
+        } else if (tag === 'PRIVATE_SPK_STOP') {
+          handlePTT_PrivateStop(channel, uuid, data);
         } else if (tag.includes('PRIVATE_SPK')) {
-          console.log('📞 [PTT PRIVATE CALL CONTROL]', tag);
-          // TODO: 私人通話控制處理
+          console.log('📞 [PTT PRIVATE CALL CONTROL]', tag, data);
         } else {
           // 其他未知的 CHANNEL_ANNOUNCE 訊息
           handlePTT_Broadcast(channel, uuid, tag, data);
@@ -1190,6 +1296,11 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
+    // 從設備連線表中移除
+    if (ws.deviceId) {
+      pttState.deviceConnections.delete(ws.deviceId);
+      console.log(`📱 Device unregistered: ${ws.deviceId}`);
+    }
     console.log(`🔌 WebSocket client disconnected from ${clientIp}`);
     console.log(`   Remaining clients: ${wss.clients.size}`);
   });
@@ -1221,6 +1332,15 @@ function broadcastToClients(data) {
 
 function handleWebSocketMessage(ws, data) {
   switch (data.type) {
+    case 'register_device':
+      // 前端註冊設備 ID（用於私人通話）
+      if (data.deviceId) {
+        pttState.deviceConnections.set(data.deviceId, ws);
+        ws.deviceId = data.deviceId;  // 將 deviceId 附加到 ws 物件
+        console.log(`📱 Device registered: ${data.deviceId} (Total: ${pttState.deviceConnections.size})`);
+      }
+      break;
+
     case 'send_command':
       mqttClient.publish(
         data.topic || MQTT_CONFIG.topics.CAMERA_CONTROL,
