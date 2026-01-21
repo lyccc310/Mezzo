@@ -652,7 +652,18 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                     </div>
 
                     {/* 頻道狀態顯示 */}
-                    {currentSpeaker ? (
+                    {isRecording ? (
+                        // 自己正在錄音
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-2">
+                            <div className="flex items-center gap-2">
+                                <Mic className="w-4 h-4 text-red-600 animate-pulse" />
+                                <div className="text-sm">
+                                    <span className="font-medium text-red-900">您正在發話中</span>
+                                </div>
+                            </div>
+                        </div>
+                    ) : currentSpeaker && currentSpeaker !== deviceId ? (
+                        // 其他人正在發話
                         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2">
                             <div className="flex items-center gap-2">
                                 <Mic className="w-4 h-4 text-yellow-600 animate-pulse" />
@@ -663,6 +674,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                             </div>
                         </div>
                     ) : (
+                        // 頻道空閒
                         <div className="bg-green-50 border border-green-200 rounded-lg p-2">
                             <div className="flex items-center gap-2">
                                 <Mic className="w-4 h-4 text-green-600" />
@@ -673,8 +685,8 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                         </div>
                     )}
 
-                    {/* 請求中狀態 */}
-                    {requestingMic && (
+                    {/* 請求中狀態 - 只在請求階段但還沒開始錄音時顯示 */}
+                    {requestingMic && !isRecording && (
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-2">
                             <div className="flex items-center gap-2">
                                 <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
