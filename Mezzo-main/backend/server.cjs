@@ -910,7 +910,7 @@ function handlePTT_PrivateStop(channel, uuid, data) {
 }
 
 /**
- * 處理 PTT 群組通話「請求發言」(搶麥機制)
+ * 處理 PTT 群組通話「請求發言」(搶麥請求機制 - 需要當前說話者同意)
  * Tag: PTT_MSG_TYPE_SPEECH_START
  */
 function handlePTT_SpeechStart(channel, uuid, data) {
@@ -925,15 +925,28 @@ function handlePTT_SpeechStart(channel, uuid, data) {
 
     // 檢查是否已有人在說話
     if (currentSpeaker && currentSpeaker !== uuid) {
-      // 拒絕請求 - 已有人在使用麥克風
-      console.log(`🚫 Speech request denied: ${uuid} (${currentSpeaker} is speaking)`);
+      // 發送搶麥請求給當前說話者
+      console.log(`🔔 Sending mic request from ${uuid} to current speaker ${currentSpeaker}`);
 
-      const senderWs = pttState.deviceConnections.get(uuid);
-      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
-        senderWs.send(JSON.stringify({
-          type: 'ptt_speech_deny',
+      const currentSpeakerWs = pttState.deviceConnections.get(currentSpeaker);
+      if (currentSpeakerWs && currentSpeakerWs.readyState === WebSocket.OPEN) {
+        currentSpeakerWs.send(JSON.stringify({
+          type: 'ptt_mic_request',
           channel: channel,
-          reason: `${currentSpeaker} 正在使用麥克風`,
+          requester: uuid,
+          currentSpeaker: currentSpeaker,
+          timestamp: new Date().toISOString()
+        }));
+        console.log(`📞 Mic request sent to ${currentSpeaker}`);
+      }
+
+      // 通知請求者：已發送請求，等待回應
+      const requesterWs = pttState.deviceConnections.get(uuid);
+      if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
+        requesterWs.send(JSON.stringify({
+          type: 'ptt_mic_request_sent',
+          channel: channel,
+          currentSpeaker: currentSpeaker,
           timestamp: new Date().toISOString()
         }));
       }
@@ -941,7 +954,7 @@ function handlePTT_SpeechStart(channel, uuid, data) {
       return;
     }
 
-    // 允許請求 - 授予麥克風使用權
+    // 沒有人在使用，直接允許
     pttState.channelSpeakers.set(channel, uuid);
     console.log(`✅ Speech request allowed: ${uuid} on channel ${channel}`);
 
@@ -966,6 +979,67 @@ function handlePTT_SpeechStart(channel, uuid, data) {
 
   } catch (error) {
     console.error('❌ PTT SPEECH_START handler error:', error);
+  }
+}
+
+/**
+ * 處理搶麥請求的回應 (同意或拒絕)
+ * Tag: PTT_MSG_TYPE_MIC_RESPONSE
+ */
+function handlePTT_MicResponse(channel, uuid, data) {
+  try {
+    // data 格式: "requesterUUID,accept/deny"
+    const [requesterUUID, response] = data.split(',');
+
+    console.log('🔔 [PTT_MSG_TYPE_MIC_RESPONSE]', {
+      channel: channel,
+      from: uuid,
+      requester: requesterUUID,
+      response: response
+    });
+
+    const requesterWs = pttState.deviceConnections.get(requesterUUID);
+    const currentSpeaker = pttState.channelSpeakers.get(channel);
+
+    if (response === 'accept') {
+      // 當前說話者同意讓出麥克風
+      pttState.channelSpeakers.set(channel, requesterUUID);
+      console.log(`✅ Mic handed over: ${uuid} → ${requesterUUID}`);
+
+      // 通知請求者：已獲得麥克風
+      if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
+        requesterWs.send(JSON.stringify({
+          type: 'ptt_speech_allow',
+          channel: channel,
+          timestamp: new Date().toISOString()
+        }));
+      }
+
+      // 廣播給所有人：新的說話者
+      broadcastToClients({
+        type: 'ptt_speaker_update',
+        channel: channel,
+        speaker: requesterUUID,
+        action: 'start',
+        previousSpeaker: uuid,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      // 拒絕請求
+      console.log(`🚫 Mic request denied: ${uuid} refused ${requesterUUID}`);
+
+      if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
+        requesterWs.send(JSON.stringify({
+          type: 'ptt_speech_deny',
+          channel: channel,
+          reason: `${uuid} 拒絕讓出麥克風`,
+          timestamp: new Date().toISOString()
+        }));
+      }
+    }
+
+  } catch (error) {
+    console.error('❌ PTT MIC_RESPONSE handler error:', error);
   }
 }
 
@@ -1308,6 +1382,8 @@ pttMqttClient.on('message', (topic, message) => {
           handlePTT_SpeechStart(channel, uuid, data);
         } else if (tag === 'PTT_MSG_TYPE_SPEECH_STOP') {
           handlePTT_SpeechStop(channel, uuid, data);
+        } else if (tag === 'PTT_MSG_TYPE_MIC_RESPONSE') {
+          handlePTT_MicResponse(channel, uuid, data);
         } else if (tag.includes('PTT_MSG_TYPE_SPEECH')) {
           console.log('🎙️ [PTT SPEECH CONTROL - UNHANDLED]', tag);
         } else if (tag === 'PRIVATE_SPK_REQ') {

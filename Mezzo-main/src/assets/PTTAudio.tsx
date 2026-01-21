@@ -217,6 +217,26 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                     alert(`無法取得麥克風：${data.reason || '已有人在使用'}`);
                 }
 
+                // 收到請求已發送通知
+                if (data.type === 'ptt_mic_request_sent' && data.channel === channel) {
+                    console.log(`⏳ Mic request sent to ${data.currentSpeaker}, waiting for response...`);
+                    // 保持 requestingMic 狀態，顯示等待中
+                }
+
+                // 收到搶麥請求（有人想要搶我的麥克風）
+                if (data.type === 'ptt_mic_request' && data.channel === channel && data.currentSpeaker === deviceId) {
+                    console.log(`🔔 Mic request from ${data.requester}`);
+                    const accept = window.confirm(`${data.requester} 想要發言，是否讓出麥克風？`);
+
+                    // 發送回應
+                    sendMicResponse(data.requester, accept);
+
+                    if (accept) {
+                        // 停止自己的錄音
+                        stopGroupRecording();
+                    }
+                }
+
                 // 收到說話者更新（誰在說話）
                 if (data.type === 'ptt_speaker_update' && data.channel === channel) {
                     if (data.action === 'start') {
@@ -237,7 +257,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         return () => {
             ws.removeEventListener('message', handleMessage);
         };
-    }, [ws, channel]);
+    }, [ws, channel, deviceId]);
 
     // 請求發言權限（群組通話的搶麥機制）
     const startGroupRecording = async () => {
@@ -289,6 +309,44 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             console.error('❌ Failed to request PTT permission:', error);
             setRequestingMic(false);
             alert('無法請求發言權限');
+        }
+    };
+
+    // 發送搶麥回應（同意或拒絕讓出麥克風）
+    const sendMicResponse = async (requesterUUID: string, accept: boolean) => {
+        try {
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            const tag = 'PTT_MSG_TYPE_MIC_RESPONSE';
+            const data = `${requesterUUID},${accept ? 'accept' : 'deny'}`;
+
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
+            });
+
+            console.log(`📤 Mic response sent: ${accept ? 'accept' : 'deny'} to ${requesterUUID}`);
+        } catch (error) {
+            console.error('❌ Failed to send mic response:', error);
         }
     };
 

@@ -860,18 +860,9 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                 });
 
                 if (response.ok) {
-                    // 本地顯示
-                    const localMessage: Message = {
-                        id: `voice-${Date.now()}`,
-                        from: 'COMMAND_CENTER',
-                        to: selectedGroup === 'all' ? 'all' : `group:${selectedGroup}`,
-                        text: voiceMessageData.text,
-                        audioData: base64Audio,
-                        timestamp: new Date().toISOString(),
-                        priority: 3
-                    };
-                    setMessages(prev => [...prev, localMessage]);
+                    // 不需要本地顯示，後端會透過 WebSocket 廣播回來
                     showPTTStatus(`✅ 語音訊息已發送`, 'success');
+                    console.log('📤 Voice message sent, waiting for WebSocket broadcast...');
                 } else {
                     showPTTStatus('❌ 發送語音訊息失敗', 'error');
                 }
