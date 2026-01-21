@@ -46,6 +46,7 @@ const GPSTracking: React.FC = () => {
     const [isRecording, setIsRecording] = useState(false);
     const [pttStatus, setPttStatus] = useState('');
     const [pttStatusType, setPttStatusType] = useState<'success' | 'error' | 'info'>('info');
+    const [selectedPTTFunction, setSelectedPTTFunction] = useState('');
 
     // ===== 使用 useRef 保存 WebSocket 和重連計時器 =====
     const wsRef = useRef<WebSocket | null>(null);
@@ -67,6 +68,16 @@ const GPSTracking: React.FC = () => {
             ...deviceGroups.filter(g => g !== '未分組')
         ])
     );
+
+    // ===== PTT 功能列表 =====
+    const pttFunctions = [
+        { value: '', label: '請選擇 PTT 功能...' },
+        { value: 'gps', label: '📍 GPS 位置發送' },
+        { value: 'sos', label: '🆘 SOS 緊急警報' },
+        { value: 'broadcast', label: '📢 廣播訊息' },
+        { value: 'recording', label: '📹 錄影控制' },
+        { value: 'audio', label: '🎙️ 語音通話' },
+    ];
 
     // ===== PTT 函數 =====
     const showPTTStatus = (msg: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -647,6 +658,146 @@ const GPSTracking: React.FC = () => {
         }
     };
 
+    // ===== 渲染 PTT 功能內容 =====
+    const renderPTTFunctionContent = () => {
+        if (selectedPTTFunction === 'gps') {
+            return (
+                <div className="border border-green-200 rounded-lg p-4 space-y-3 bg-green-50">
+                    <div className="flex items-center gap-2 text-base font-semibold text-green-700">
+                        <MapPin className="w-5 h-5" />
+                        GPS 位置發送
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">緯度</label>
+                            <input
+                                type="text"
+                                value={gpsLat}
+                                onChange={(e) => setGpsLat(e.target.value)}
+                                placeholder="25.033964"
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">經度</label>
+                            <input
+                                type="text"
+                                value={gpsLon}
+                                onChange={(e) => setGpsLon(e.target.value)}
+                                placeholder="121.564472"
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                            />
+                        </div>
+                    </div>
+                    <button onClick={sendPTTGPS} className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2">
+                        <MapPin className="w-4 h-4" />
+                        發送 GPS 位置
+                    </button>
+                </div>
+            );
+        }
+
+        if (selectedPTTFunction === 'sos') {
+            return (
+                <div className="border border-red-300 rounded-lg p-4 space-y-3 bg-red-50">
+                    <div className="flex items-center gap-2 text-base font-semibold text-red-700">
+                        <AlertCircle className="w-5 h-5" />
+                        SOS 緊急警報
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">緯度</label>
+                            <input
+                                type="text"
+                                value={sosLat}
+                                onChange={(e) => setSosLat(e.target.value)}
+                                placeholder="25.033964"
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">經度</label>
+                            <input
+                                type="text"
+                                value={sosLon}
+                                onChange={(e) => setSosLon(e.target.value)}
+                                placeholder="121.564472"
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                            />
+                        </div>
+                    </div>
+                    <button onClick={sendPTTSOS} className="w-full bg-red-600 hover:bg-red-700 text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2">
+                        <AlertCircle className="w-4 h-4" />
+                        發送 SOS 警報
+                    </button>
+                </div>
+            );
+        }
+
+        if (selectedPTTFunction === 'broadcast') {
+            return (
+                <div className="border border-blue-200 rounded-lg p-4 space-y-3 bg-blue-50">
+                    <div className="flex items-center gap-2 text-base font-semibold text-blue-700">
+                        <MessageSquare className="w-4 h-4" />
+                        廣播訊息
+                    </div>
+                    <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">訊息內容</label>
+                        <textarea
+                            value={broadcastMsg}
+                            onChange={(e) => setBroadcastMsg(e.target.value)}
+                            placeholder="輸入要廣播的訊息..."
+                            rows={3}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500"
+                        />
+                    </div>
+                    <button onClick={sendPTTBroadcast} className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2">
+                        <Send className="w-4 h-4" />
+                        發送廣播訊息
+                    </button>
+                </div>
+            );
+        }
+
+        if (selectedPTTFunction === 'recording') {
+            return (
+                <div className="border border-purple-200 rounded-lg p-4 space-y-3 bg-purple-50">
+                    <div className="flex items-center gap-2 text-base font-semibold text-purple-700">
+                        <Video className="w-5 h-5" />
+                        錄影控制
+                    </div>
+                    <button
+                        onClick={toggleRecording}
+                        className={`w-full text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2 ${isRecording ? 'bg-gray-600 hover:bg-gray-700' : 'bg-purple-600 hover:bg-purple-700'}`}
+                    >
+                        <Video className="w-4 h-4" />
+                        {isRecording ? '⏹️ 停止錄影' : '📹 開始錄影'}
+                    </button>
+                    {isRecording && (
+                        <div className="flex items-center justify-center gap-2 text-red-600 bg-red-50 py-2 rounded-lg">
+                            <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
+                            <span className="text-sm font-medium">錄影進行中...</span>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        if (selectedPTTFunction === 'audio') {
+            return (
+                <div className="border border-purple-200 rounded-lg p-4 bg-purple-50">
+                    <PTTAudio
+                        deviceId={pttDeviceId}
+                        channel={pttChannel}
+                        onAudioSend={handleAudioSend}
+                    />
+                </div>
+            );
+        }
+
+        return null;
+    };
+
     // ===== 篩選相關訊息 =====
     const relevantMessages = messages.filter((msg) => {
         // 如果選擇了特定群組，只顯示該群組的訊息
@@ -680,7 +831,7 @@ const GPSTracking: React.FC = () => {
     }, [messages, showCommunication]);
 
     return (
-        <div className="flex h-screen bg-gray-100 overflow-hidden">
+        <div className="flex overflow-auto bg-gray-100">
             {/* 左側：地圖 (50%) - 固定 */}
             <div className="w-1/2 h-full">
                 <CameraMap
@@ -712,7 +863,10 @@ const GPSTracking: React.FC = () => {
                     {/* 固定按鈕 */}
                     <div className="px-4 py-2 flex gap-2 border-t border-gray-100">
                         <button
-                            onClick={() => setShowCommunication(!showCommunication)}
+                            onClick={() => {
+                                setShowCommunication(!showCommunication);
+                                if (!showCommunication) setShowPTTControl(false);
+                            }}
                             className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors ${
                                 showCommunication
                                     ? 'bg-blue-600 text-white hover:bg-blue-700'
@@ -723,7 +877,10 @@ const GPSTracking: React.FC = () => {
                             通訊
                         </button>
                         <button
-                            onClick={() => setShowPTTControl(!showPTTControl)}
+                            onClick={() => {
+                                setShowPTTControl(!showPTTControl);
+                                if (!showPTTControl) setShowCommunication(false);
+                            }}
                             className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors ${
                                 showPTTControl
                                     ? 'bg-purple-600 text-white hover:bg-purple-700'
@@ -738,230 +895,69 @@ const GPSTracking: React.FC = () => {
 
                 {/* 主要內容區域 - 可滾動 */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {/* PTT 控制面板 */}
-                    {showPTTControl && (
-                        <div className="bg-white rounded-lg shadow-lg p-4 space-y-4">
-                            <div className="flex items-center justify-between border-b pb-3">
-                                <h3 className="text-lg font-bold flex items-center gap-2">
-                                    <Radio className="w-5 h-5 text-purple-600" />
-                                    PTT 控制面板
-                                </h3>
+                    {/* 連線狀態卡片 */}
+                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                        <div className="grid grid-cols-3 gap-4">
+                            <div>
+                                <div className="text-xs text-gray-600 mb-1">WebSocket 狀態</div>
                                 <div className="flex items-center gap-2">
-                                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                                    <span className="text-xs text-gray-600">已連接</span>
+                                    <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                                    <span className="text-sm font-medium">{wsConnected ? '已連接' : '未連接'}</span>
                                 </div>
                             </div>
-
-                            {/* 狀態訊息 */}
-                            {pttStatus && (
-                                <div className={`p-2 rounded text-sm ${
-                                    pttStatusType === 'success' ? 'bg-green-50 text-green-800 border border-green-200' :
-                                    pttStatusType === 'error' ? 'bg-red-50 text-red-800 border border-red-200' :
-                                    'bg-blue-50 text-blue-800 border border-blue-200'
-                                }`}>
-                                    {pttStatus}
-                                </div>
-                            )}
-
-                            {/* 基本設定 */}
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                                        PTT 頻道
-                                    </label>
-                                    <select
-                                        value={pttChannel}
-                                        onChange={(e) => setPttChannel(e.target.value)}
-                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
-                                    >
-                                        {pttChannels.map((channel) => (
-                                            <option key={channel} value={channel}>
-                                                {channel === 'emergency' ? '🆘 緊急頻道' :
-                                                 channel.startsWith('channel') ? `頻道 ${channel.slice(-1)}` :
-                                                 `📻 ${channel}`}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                                        設備 ID
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={pttDeviceId}
-                                        onChange={(e) => setPttDeviceId(e.target.value)}
-                                        placeholder="USER-001"
-                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
-                                    />
-                                </div>
+                            <div>
+                                <div className="text-xs text-gray-600 mb-1">連接設備</div>
+                                <span className="text-lg font-bold text-blue-600">{devices.length}</span>
                             </div>
-
-                            {/* GPS 發送 */}
-                            <div className="border border-gray-200 rounded p-3 space-y-2">
-                                <div className="flex items-center gap-2 text-sm font-semibold">
-                                    <MapPin className="w-4 h-4 text-green-600" />
-                                    GPS 位置發送
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <input
-                                        type="text"
-                                        value={gpsLat}
-                                        onChange={(e) => setGpsLat(e.target.value)}
-                                        placeholder="緯度"
-                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
-                                    />
-                                    <input
-                                        type="text"
-                                        value={gpsLon}
-                                        onChange={(e) => setGpsLon(e.target.value)}
-                                        placeholder="經度"
-                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
-                                    />
-                                </div>
-                                <button
-                                    onClick={sendPTTGPS}
-                                    className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2"
+                            <div>
+                                <div className="text-xs text-gray-600 mb-1">PTT 頻道</div>
+                                <select
+                                    value={pttChannel}
+                                    onChange={(e) => setPttChannel(e.target.value)}
+                                    className="text-sm border border-gray-300 rounded px-2 py-1"
                                 >
-                                    <MapPin className="w-4 h-4" />
-                                    發送 GPS
-                                </button>
+                                    {pttChannels.map((channel) => (
+                                        <option key={channel} value={channel}>
+                                            {channel === 'emergency' ? '🆘 緊急' :
+                                             channel.startsWith('channel') ? `頻道 ${channel.slice(-1)}` :
+                                             channel}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
-
-                            {/* SOS 警報 */}
-                            <div className="border border-red-200 rounded p-3 space-y-2 bg-red-50">
-                                <div className="flex items-center gap-2 text-sm font-semibold text-red-700">
-                                    <AlertCircle className="w-4 h-4" />
-                                    SOS 緊急警報
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <input
-                                        type="text"
-                                        value={sosLat}
-                                        onChange={(e) => setSosLat(e.target.value)}
-                                        placeholder="緯度"
-                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
-                                    />
-                                    <input
-                                        type="text"
-                                        value={sosLon}
-                                        onChange={(e) => setSosLon(e.target.value)}
-                                        placeholder="經度"
-                                        className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded"
-                                    />
-                                </div>
-                                <button
-                                    onClick={sendPTTSOS}
-                                    className="w-full bg-red-600 hover:bg-red-700 text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2"
-                                >
-                                    <AlertCircle className="w-4 h-4" />
-                                    發送 SOS
-                                </button>
-                            </div>
-
-                            {/* 廣播訊息 */}
-                            <div className="border border-gray-200 rounded p-3 space-y-2">
-                                <div className="flex items-center gap-2 text-sm font-semibold">
-                                    <MessageSquare className="w-4 h-4 text-blue-600" />
-                                    廣播訊息
-                                </div>
-                                <textarea
-                                    value={broadcastMsg}
-                                    onChange={(e) => setBroadcastMsg(e.target.value)}
-                                    placeholder="輸入要廣播的訊息..."
-                                    rows={2}
-                                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded resize-none"
-                                />
-                                <button
-                                    onClick={sendPTTBroadcast}
-                                    className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2"
-                                >
-                                    <Send className="w-4 h-4" />
-                                    發送廣播
-                                </button>
-                            </div>
-
-                            {/* 錄影控制 */}
-                            <div className="border border-gray-200 rounded p-3 space-y-2">
-                                <div className="flex items-center gap-2 text-sm font-semibold">
-                                    <Video className="w-4 h-4 text-purple-600" />
-                                    錄影控制
-                                </div>
-                                <button
-                                    onClick={toggleRecording}
-                                    className={`w-full ${
-                                        isRecording 
-                                            ? 'bg-gray-600 hover:bg-gray-700' 
-                                            : 'bg-purple-600 hover:bg-purple-700'
-                                    } text-white text-sm font-semibold py-2 rounded flex items-center justify-center gap-2`}
-                                >
-                                    <Video className="w-4 h-4" />
-                                    {isRecording ? '⏹️ 停止錄影' : '📹 開始錄影'}
-                                </button>
-                                {isRecording && (
-                                    <div className="flex items-center justify-center gap-2 text-red-600">
-                                        <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
-                                        <span className="text-xs font-medium">錄影中...</span>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* PTT 語音通話 */}
-                            <PTTAudio
-                                deviceId={pttDeviceId}
-                                channel={pttChannel}
-                                onAudioSend={handleAudioSend}
-                            />
                         </div>
-                    )}
+                    </div>
 
                     {/* 通訊面板 */}
                     {showCommunication && (
-                        <div className="bg-white rounded-lg shadow-lg p-4 space-y-4 flex flex-col h-[600px]">
-                            <div className="flex items-center justify-between border-b pb-3">
-                                <h3 className="text-lg font-bold flex items-center gap-2">
-                                    <MessageSquare className="w-5 h-5 text-blue-600" />
-                                    通訊面板
-                                </h3>
-                                <div className="flex items-center gap-2">
-                                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                                    <span className="text-xs text-gray-600">已連接</span>
-                                </div>
-                            </div>
+                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
+                            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                <MessageSquare className="w-4 h-4" />
+                                通訊面板
+                            </h3>
 
-                            {/* 頻道/群組選擇器 */}
-                            <div className="space-y-2">
-                                <label className="block text-xs font-medium text-gray-700">
-                                    選擇 PTT 頻道/群組
-                                </label>
-                                <select
-                                    value={selectedGroup}
-                                    onChange={(e) => setSelectedGroup(e.target.value)}
-                                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                >
-                                    <option value="all">📢 全體廣播 (使用當前 PTT 頻道: {pttChannel})</option>
-                                    {pttChannels.map((channel) => {
-                                        const deviceCount = devices.filter(d => d.group === channel).length;
-                                        return (
-                                            <option key={channel} value={channel}>
-                                                📻 {channel} 頻道 {deviceCount > 0 ? `(${deviceCount} 人)` : ''}
-                                            </option>
-                                        );
-                                    })}
-                                </select>
-                                <div className="text-xs text-gray-500 flex items-center gap-1">
-                                    <Radio className="w-3 h-3" />
-                                    當前 PTT 設備: {pttDeviceId}
-                                </div>
-                            </div>
+                            {/* 頻道選擇 */}
+                            <select
+                                value={selectedGroup}
+                                onChange={(e) => setSelectedGroup(e.target.value)}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                            >
+                                <option value="all">📢 全體廣播</option>
+                                {pttChannels.map((channel) => {
+                                    const count = devices.filter(d => d.group === channel).length;
+                                    return (
+                                        <option key={channel} value={channel}>
+                                            {channel} {count > 0 ? `(${count})` : ''}
+                                        </option>
+                                    );
+                                })}
+                            </select>
 
                             {/* 訊息列表 */}
-                            <div className="flex-1 overflow-y-auto bg-gray-50 rounded-lg p-3 space-y-2 min-h-0">
+                            <div className="bg-white rounded-lg p-3 min-h-32 space-y-2 border border-gray-200">
                                 {relevantMessages.length === 0 ? (
-                                    <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                                        <MessageSquare className="w-12 h-12 mb-2" />
-                                        <p className="text-sm">尚無訊息</p>
+                                    <div className="flex items-center justify-center py-8 text-gray-400">
+                                        <span className="text-sm">尚無訊息</span>
                                     </div>
                                 ) : (
                                     relevantMessages.map((msg) => {
@@ -972,26 +968,14 @@ const GPSTracking: React.FC = () => {
                                                 className={`flex ${isFromCommandCenter ? 'justify-end' : 'justify-start'}`}
                                             >
                                                 <div
-                                                    className={`max-w-[80%] rounded-lg p-3 ${
+                                                    className={`max-w-[70%] rounded-lg p-2 text-xs ${
                                                         isFromCommandCenter
                                                             ? 'bg-blue-600 text-white'
                                                             : 'bg-white border border-gray-200'
                                                     }`}
                                                 >
-                                                    <div className="flex items-center gap-2 mb-1">
-                                                        <span className="text-xs font-semibold">
-                                                            {msg.from}
-                                                        </span>
-                                                        {msg.to !== 'all' && (
-                                                            <span className={`text-xs ${isFromCommandCenter ? 'text-blue-200' : 'text-gray-500'}`}>
-                                                                → {msg.to.replace('group:', '群組:').replace('device:', '')}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    <p className="text-sm">{msg.text}</p>
-                                                    <div className={`text-xs mt-1 ${isFromCommandCenter ? 'text-blue-200' : 'text-gray-500'}`}>
-                                                        {formatMessageTime(msg.timestamp)}
-                                                    </div>
+                                                    <div className="font-semibold mb-1">{msg.from}</div>
+                                                    <div>{msg.text}</div>
                                                 </div>
                                             </div>
                                         );
@@ -1000,65 +984,101 @@ const GPSTracking: React.FC = () => {
                                 <div ref={messagesEndRef} />
                             </div>
 
-                            {/* 訊息輸入區 */}
-                            <div className="border-t pt-3 space-y-2">
-                                <div className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={messageText}
-                                        onChange={(e) => setMessageText(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter' && !e.shiftKey) {
-                                                e.preventDefault();
-                                                handleSendMessage();
-                                            }
-                                        }}
-                                        placeholder={
-                                            selectedGroup === 'all'
-                                                ? `發送到 PTT 頻道 ${pttChannel}...`
-                                                : `發送到頻道 ${selectedGroup}...`
+                            {/* 訊息輸入 */}
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={messageText}
+                                    onChange={(e) => setMessageText(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            handleSendMessage();
                                         }
-                                        className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                    />
-                                    <button
-                                        onClick={handleSendMessage}
-                                        disabled={!messageText.trim()}
-                                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
-                                    >
-                                        <Send className="w-4 h-4" />
-                                        發送
-                                    </button>
-                                </div>
-                                <div className="text-xs text-gray-500">
-                                    按 Enter 發送，Shift+Enter 換行
-                                </div>
+                                    }}
+                                    placeholder="輸入訊息..."
+                                    className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                                />
+                                <button
+                                    onClick={handleSendMessage}
+                                    disabled={!messageText.trim()}
+                                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                                >
+                                    <Send className="w-4 h-4" />
+                                </button>
                             </div>
                         </div>
                     )}
 
-                    {/* 設備資訊 */}
-                    {selectedDevice && !showPTTControl && !showCommunication && (
-                        <div className="bg-white rounded-lg shadow p-4">
-                            <h3 className="text-lg font-bold mb-3">{selectedDevice.callsign || selectedDevice.id}</h3>
-                            <div className="space-y-2 text-sm">
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">類型:</span>
-                                    <span className="font-medium">{selectedDevice.type}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">狀態:</span>
-                                    <span className="font-medium">{selectedDevice.status}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">群組:</span>
-                                    <span className="font-medium">{selectedDevice.group || '未分組'}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">最後更新:</span>
-                                    <span className="font-medium">{formatLastUpdate(selectedDevice.lastUpdate)}</span>
-                                </div>
+                    {/* PTT 功能選擇器 */}
+                    {showPTTControl && (
+                        <>
+                            <div className="space-y-3">
+                                <label className="block text-sm font-semibold text-gray-800">PTT 功能選擇</label>
+                                <select
+                                    value={selectedPTTFunction}
+                                    onChange={(e) => setSelectedPTTFunction(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                >
+                                    {pttFunctions.map((func) => (
+                                        <option key={func.value} value={func.value}>
+                                            {func.label}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
-                        </div>
+
+                            {/* 基本設定 */}
+                            <div className="space-y-3">
+                                <label className="block text-sm font-semibold text-gray-800">設備ID</label>
+                                <input
+                                    type="text"
+                                    value={pttDeviceId}
+                                    onChange={(e) => setPttDeviceId(e.target.value)}
+                                    placeholder="設備 ID"
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                />
+                            </div>
+
+                            {/* 狀態訊息 */}
+                            {pttStatus && (
+                                <div className={`p-3 rounded-lg text-sm border ${
+                                    pttStatusType === 'success' ? 'bg-green-50 text-green-800 border-green-200' :
+                                    pttStatusType === 'error' ? 'bg-red-50 text-red-800 border-red-200' :
+                                    'bg-blue-50 text-blue-800 border-blue-200'
+                                }`}>
+                                    {pttStatus}
+                                </div>
+                            )}
+
+                            {/* PTT 功能內容 */}
+                            {selectedPTTFunction && renderPTTFunctionContent()}
+
+                            {/* 設備詳細資訊 */}
+                            {selectedDevice && !selectedPTTFunction && (
+                                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
+                                    <h3 className="font-bold text-gray-800">{selectedDevice.callsign || selectedDevice.id}</h3>
+                                    <div className="grid grid-cols-2 gap-3 text-sm">
+                                        <div>
+                                            <div className="text-gray-600">類型</div>
+                                            <div className="font-medium">{selectedDevice.type}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-gray-600">狀態</div>
+                                            <div className="font-medium text-green-600">{selectedDevice.status}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-gray-600">群組</div>
+                                            <div className="font-medium">{selectedDevice.group || '未分組'}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-gray-600">更新時間</div>
+                                            <div className="font-medium text-sm">{formatLastUpdate(selectedDevice.lastUpdate)}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             </div>
