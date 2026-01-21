@@ -99,7 +99,8 @@ if (STREAM_CONFIG.enabled && !fs.existsSync(STREAM_CONFIG.outputDir)) {
 const pttState = {
   activeUsers: new Map(),      // 活躍的 PTT 使用者
   sosAlerts: new Map(),        // SOS 警報
-  channelUsers: new Map()      // 各頻道的使用者
+  channelUsers: new Map(),     // 各頻道的使用者
+  broadcastedTranscripts: new Set()  // 追蹤已廣播的轉錄訊息 (避免重複)
 };
 
 // 確保 streams 目錄存在
@@ -727,6 +728,16 @@ function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
       audioSize: audioBuffer.length
     });
 
+    // 建立音訊數據的 base64
+    const audioData = audioBuffer.toString('base64');
+
+    // 檢查是否已經廣播過（作為 transcript）
+    const messageKey = `${uuid}-${audioData.substring(0, 50)}`;
+    if (pttState.broadcastedTranscripts.has(messageKey)) {
+      console.log(`⏭️ Skipping duplicate broadcast (already sent as transcript): ${uuid}`);
+      return;
+    }
+
     // 建立音訊封包事件
     const audioPacket = {
       id: `speech-${uuid}-${Date.now()}`,
@@ -734,7 +745,7 @@ function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
       channel: channel,
       from: uuid,
       timestamp: new Date().toISOString(),
-      audioData: audioBuffer.toString('base64'),  // 轉為 base64 傳輸
+      audioData: audioData,
       tag: tag
     };
 
@@ -1110,11 +1121,11 @@ pttMqttClient.on('message', (topic, message) => {
         break;
 
       case 'SPEECH':
-        handlePTT_SPEECH(channel, uuid, tag, buffer.slice(160));
+        handlePTT_SPEECH(channel, uuid, tag, message.slice(160));
         break;
 
       case 'PRIVATE':
-        handlePTT_PRIVATE(topic, channel, uuid, tag, buffer.slice(160));
+        handlePTT_PRIVATE(topic, channel, uuid, tag, message.slice(160));
         break;
 
       default:
@@ -1683,7 +1694,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));  // 增加限制以支援音訊封包
 app.use('/streams', express.static(streamsPath));
 
 // ==================== REST API ====================
@@ -2111,7 +2122,7 @@ app.get('/api/tak/status', (req, res) => {
 
 app.post('/ptt/publish', (req, res) => {
   try {
-    const { topic, message, encoding } = req.body;
+    const { topic, message, encoding, transcript } = req.body;
 
     if (!topic || !message) {
       return res.status(400).json({
@@ -2120,7 +2131,7 @@ app.post('/ptt/publish', (req, res) => {
       });
     }
 
-    console.log(`📤 Publishing to PTT MQTT: ${topic}`);
+    console.log(`📤 Publishing to PTT MQTT: ${topic}`, transcript ? `with transcript: "${transcript}"` : '');
 
     // 處理二進位訊息
     let buffer;
@@ -2130,6 +2141,46 @@ app.post('/ptt/publish', (req, res) => {
       buffer = Buffer.from(message, 'utf8');
     } else {
       buffer = Buffer.from(JSON.stringify(message));
+    }
+
+    // 如果有轉錄文字，直接廣播文字訊息（包含音訊數據）
+    if (transcript && transcript.trim()) {
+      const topicParts = topic.split('/');
+      const channel = topicParts[3];  // /WJI/PTT/{Channel}/...
+
+      // 解析 UUID (從 buffer 的前 160 bytes 中提取)
+      const uuidBuffer = buffer.slice(32, 160);
+      const uuid = uuidBuffer.toString('utf8').replace(/\0/g, '').trim();
+
+      // 提取音訊數據 (從 160 bytes 之後)
+      const audioData = buffer.slice(160).toString('base64');
+
+      // 建立唯一識別碼 (用於追蹤已廣播的訊息)
+      const messageKey = `${uuid}-${audioData.substring(0, 50)}`;  // 使用 UUID + 音訊前綴
+
+      // 廣播文字訊息（包含音訊數據以便重播）
+      broadcastToClients({
+        type: 'ptt_transcript',
+        message: {
+          id: `transcript-${uuid}-${Date.now()}`,
+          from: uuid,
+          to: `group:${channel}`,
+          text: `💬 ${transcript}`,
+          timestamp: new Date().toISOString(),
+          priority: 3,
+          audioData: audioData  // 加入音訊數據
+        }
+      });
+
+      // 標記此訊息已廣播（避免 MQTT 回調時重複廣播）
+      pttState.broadcastedTranscripts.add(messageKey);
+
+      // 5 秒後清除標記（避免記憶體洩漏）
+      setTimeout(() => {
+        pttState.broadcastedTranscripts.delete(messageKey);
+      }, 5000);
+
+      console.log(`📝 Transcript broadcasted: ${uuid} → "${transcript}" (with ${audioData.length} bytes audio)`);
     }
 
     // 發布到 PTT MQTT
@@ -2146,7 +2197,8 @@ app.post('/ptt/publish', (req, res) => {
       res.json({
         success: true,
         topic: topic,
-        messageSize: buffer.length
+        messageSize: buffer.length,
+        transcriptSent: !!transcript
       });
     });
   } catch (error) {

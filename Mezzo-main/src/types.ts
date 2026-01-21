@@ -64,6 +64,7 @@ export interface Message {
     text: string;
     timestamp: string;
     priority?: number;
+    audioData?: string;  // Base64 encoded audio data for voice messages
 }
 
 export interface TeamMember {

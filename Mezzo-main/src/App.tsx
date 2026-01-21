@@ -604,7 +604,7 @@ export default function App() {
             />
           )}
 
-        {activeMenu === 'GPS Tracking' && <GPSTracking />}
+        {activeMenu === 'GPS Tracking' && <GPSTracking userName={userName} />}
 
         {activeMenu === 'Device Management' && <Device />}
 

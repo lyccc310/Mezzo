@@ -22,7 +22,11 @@ const WS_URL = API_CONFIG.baseUrl.replace('http', 'ws').replace(':4000', ':4001'
 console.log('📡 GPSTracking API Config:', API_CONFIG.baseUrl);
 console.log('📡 GPSTracking WebSocket:', WS_URL);
 
-const GPSTracking: React.FC = () => {
+interface GPSTrackingProps {
+    userName?: string;
+}
+
+const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
     const [devices, setDevices] = useState<Device[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
@@ -37,7 +41,8 @@ const GPSTracking: React.FC = () => {
     // ===== PTT 控制狀態 =====
     const [showPTTControl, setShowPTTControl] = useState(false);
     const [pttChannel, setPttChannel] = useState('channel1');
-    const [pttDeviceId, setPttDeviceId] = useState('USER-001');
+    // 使用登入時的 userName，如果沒有則生成隨機 ID
+    const pttDeviceId = userName || `USER-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const [gpsLat, setGpsLat] = useState('25.033964');
     const [gpsLon, setGpsLon] = useState('121.564472');
     const [sosLat, setSosLat] = useState('25.033964');
@@ -268,7 +273,7 @@ const GPSTracking: React.FC = () => {
     };
 
     // ===== 音訊發送函數 =====
-    const handleAudioSend = async (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string) => {
+    const handleAudioSend = async (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string, transcript?: string) => {
         try {
             // 將音訊數據轉換為數組
             const audioArray = Array.from(new Uint8Array(audioData));
@@ -303,17 +308,23 @@ const GPSTracking: React.FC = () => {
 
             const message = Array.from(combined);
 
-            // 發送到後端
+            // 發送到後端（包含轉錄文字）
             const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ topic, message, encoding: 'binary' })
+                body: JSON.stringify({
+                    topic,
+                    message,
+                    encoding: 'binary',
+                    transcript: transcript || ''  // 新增轉錄文字
+                })
             });
 
             if (response.ok) {
                 const typeText = isPrivate ? '📞 私人通話' : '🎙️ 群組語音';
-                showPTTStatus(`${typeText} 已發送 (${audioData.byteLength} bytes)`, 'success');
-                console.log(`${typeText} sent:`, { topic, size: audioData.byteLength });
+                const transcriptInfo = transcript ? ` | 文字: "${transcript}"` : '';
+                showPTTStatus(`${typeText} 已發送 (${audioData.byteLength} bytes)${transcriptInfo}`, 'success');
+                console.log(`${typeText} sent:`, { topic, size: audioData.byteLength, transcript });
             } else {
                 throw new Error('Failed to send audio');
             }
@@ -321,6 +332,80 @@ const GPSTracking: React.FC = () => {
             console.error('❌ Send audio error:', error);
             showPTTStatus('❌ 音訊發送失敗', 'error');
         }
+    };
+
+    // ===== 音訊播放函數 =====
+    const handleAudioPlayback = async (packet: any) => {
+        try {
+            console.log('🔊 Playing audio from:', packet.from, 'Type:', packet.type);
+
+            // 如果是自己發送的，不播放音訊（避免聽到自己的聲音）
+            if (packet.from === pttDeviceId) {
+                console.log('⏭️ Skipping own audio playback');
+                // 不創建訊息，因為 ptt_transcript 會處理帶有文字的訊息
+                // 避免重複
+                return;
+            }
+
+            // 解碼 base64 音訊數據
+            const audioData = atob(packet.audioData);
+            const audioBytes = new Uint8Array(audioData.length);
+            for (let i = 0; i < audioData.length; i++) {
+                audioBytes[i] = audioData.charCodeAt(i);
+            }
+
+            // 創建 Blob 並播放 - 指定完整的 MIME type
+            const audioBlob = new Blob([audioBytes], { type: 'audio/webm;codecs=opus' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+
+            // 播放音訊
+            audio.play().then(() => {
+                console.log('✅ Audio playing');
+                showPTTStatus(`🔊 正在播放來自 ${packet.from} 的語音`, 'info');
+            }).catch(err => {
+                console.error('❌ Audio play error:', err);
+                // 嘗試使用不同的 MIME type
+                console.log('🔄 Trying fallback audio format...');
+                const fallbackBlob = new Blob([audioBytes], { type: 'audio/ogg;codecs=opus' });
+                const fallbackUrl = URL.createObjectURL(fallbackBlob);
+                const fallbackAudio = new Audio(fallbackUrl);
+
+                fallbackAudio.play().then(() => {
+                    console.log('✅ Audio playing (fallback format)');
+                    showPTTStatus(`🔊 正在播放來自 ${packet.from} 的語音`, 'info');
+                }).catch(err2 => {
+                    console.error('❌ Audio play error (fallback):', err2);
+                    showPTTStatus('❌ 音訊播放失敗 - 格式不支援', 'error');
+                    URL.revokeObjectURL(fallbackUrl);
+                });
+
+                fallbackAudio.onended = () => {
+                    URL.revokeObjectURL(fallbackUrl);
+                };
+            });
+
+            // 清理資源
+            audio.onended = () => {
+                URL.revokeObjectURL(audioUrl);
+                console.log('✅ Audio playback finished');
+            };
+
+            // 不在這裡創建訊息，因為 ptt_transcript 會處理
+            // 如果有文字轉錄，會由 ptt_transcript 處理
+            // 避免重複訊息
+
+        } catch (error) {
+            console.error('❌ Audio playback error:', error);
+            showPTTStatus('❌ 音訊播放失敗', 'error');
+        }
+    };
+
+    // ===== 語音轉文字處理函數（只用於即時顯示，不發送訊息）=====
+    const handleSpeechToText = (transcript: string) => {
+        // 只記錄日誌，不做任何操作
+        // 最終的 transcript 會在停止錄音時隨音訊一起發送
+        console.log('📝 Real-time transcription (display only):', transcript);
     };
 
     // ===== WebSocket 連接（改良版）=====
@@ -434,18 +519,43 @@ const GPSTracking: React.FC = () => {
                             });
                         }
 
+                        // 處理 PTT 音訊封包
+                        if (data.type === 'ptt_audio' && data.packet) {
+                            console.log('🎙️ Received PTT audio:', data.packet);
+                            handleAudioPlayback(data.packet);
+                        }
+
+                        // 處理 PTT 轉錄文字
+                        if (data.type === 'ptt_transcript' && data.message) {
+                            console.log('📝 Received PTT transcript:', data.message);
+                            setMessages((prev) => {
+                                // 避免重複訊息
+                                if (prev.find(m => m.id === data.message.id)) {
+                                    return prev;
+                                }
+                                return [...prev, data.message];
+                            });
+                        }
+
                         // 處理 PTT GPS 更新
                         if (data.type === 'device_update' && data.device && data.device.source?.includes('ptt')) {
                             const device = data.device;
-                            const gpsNotification: Message = {
-                                id: `gps-update-${Date.now()}`,
-                                from: device.id,
-                                to: `group:${device.group || 'PTT'}`,
-                                text: `📍 更新了位置資訊 (${device.position.lat.toFixed(6)}, ${device.position.lng.toFixed(6)})`,
-                                timestamp: new Date().toISOString(),
-                                priority: 3
-                            };
-                            setMessages((prev) => [...prev, gpsNotification]);
+                            // 過濾掉無效的 GPS 座標 (0,0) 避免洗版
+                            const isValidGPS = device.position.lat !== 0 || device.position.lng !== 0;
+
+                            if (isValidGPS) {
+                                const gpsNotification: Message = {
+                                    id: `gps-update-${Date.now()}`,
+                                    from: device.id,
+                                    to: `group:${device.group || 'PTT'}`,
+                                    text: `📍 更新了位置資訊 (${device.position.lat.toFixed(6)}, ${device.position.lng.toFixed(6)})`,
+                                    timestamp: new Date().toISOString(),
+                                    priority: 3
+                                };
+                                setMessages((prev) => [...prev, gpsNotification]);
+                            } else {
+                                console.log('⏭️ Skipping invalid GPS update (0,0) from', device.id);
+                            }
                         }
 
                         // 處理 SOS 警報
@@ -673,11 +783,16 @@ const GPSTracking: React.FC = () => {
     });
 
     // ===== 自動滾動到最新訊息 =====
+    // 使用 ref 來追蹤上一次的訊息數量
+    const prevMessagesLengthRef = useRef(messages.length);
+
     useEffect(() => {
-        if (showCommunication && messagesEndRef.current) {
+        // 只在通訊面板開啟時，且訊息數量真的增加時才滾動
+        if (showCommunication && messagesEndRef.current && messages.length > prevMessagesLengthRef.current) {
             messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [messages, showCommunication]);
+        prevMessagesLengthRef.current = messages.length;
+    }, [messages.length, showCommunication]);
 
     return (
         <div className="flex h-screen bg-gray-100 overflow-hidden">
@@ -786,15 +901,14 @@ const GPSTracking: React.FC = () => {
 
                                 <div>
                                     <label className="block text-xs font-medium text-gray-700 mb-1">
-                                        設備 ID
+                                        當前用戶
                                     </label>
-                                    <input
-                                        type="text"
-                                        value={pttDeviceId}
-                                        onChange={(e) => setPttDeviceId(e.target.value)}
-                                        placeholder="USER-001"
-                                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
-                                    />
+                                    <div className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded bg-blue-50 text-blue-900 font-semibold">
+                                        {pttDeviceId}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {userName ? '登入用戶名稱' : '訪客模式（隨機 ID）'}
+                                    </div>
                                 </div>
                             </div>
 
@@ -912,6 +1026,7 @@ const GPSTracking: React.FC = () => {
                                 deviceId={pttDeviceId}
                                 channel={pttChannel}
                                 onAudioSend={handleAudioSend}
+                                onSpeechToText={handleSpeechToText}
                             />
                         </div>
                     )}
@@ -965,15 +1080,19 @@ const GPSTracking: React.FC = () => {
                                     </div>
                                 ) : (
                                     relevantMessages.map((msg) => {
-                                        const isFromCommandCenter = msg.from === 'COMMAND_CENTER';
+                                        // Check if message is from current user
+                                        const isFromMe = msg.from === pttDeviceId || msg.from === 'COMMAND_CENTER';
+                                        // Check if it's a voice message
+                                        const isVoiceMessage = msg.text.includes('🎙️') || msg.audioData;
+
                                         return (
                                             <div
                                                 key={msg.id}
-                                                className={`flex ${isFromCommandCenter ? 'justify-end' : 'justify-start'}`}
+                                                className={`flex ${isFromMe ? 'justify-end' : 'justify-start'}`}
                                             >
                                                 <div
                                                     className={`max-w-[80%] rounded-lg p-3 ${
-                                                        isFromCommandCenter
+                                                        isFromMe
                                                             ? 'bg-blue-600 text-white'
                                                             : 'bg-white border border-gray-200'
                                                     }`}
@@ -983,13 +1102,62 @@ const GPSTracking: React.FC = () => {
                                                             {msg.from}
                                                         </span>
                                                         {msg.to !== 'all' && (
-                                                            <span className={`text-xs ${isFromCommandCenter ? 'text-blue-200' : 'text-gray-500'}`}>
+                                                            <span className={`text-xs ${isFromMe ? 'text-blue-200' : 'text-gray-500'}`}>
                                                                 → {msg.to.replace('group:', '群組:').replace('device:', '')}
                                                             </span>
                                                         )}
                                                     </div>
-                                                    <p className="text-sm">{msg.text}</p>
-                                                    <div className={`text-xs mt-1 ${isFromCommandCenter ? 'text-blue-200' : 'text-gray-500'}`}>
+
+                                                    {/* Voice message with playback button */}
+                                                    {isVoiceMessage && msg.audioData ? (
+                                                        <div className="flex flex-col gap-2">
+                                                            {/* 顯示文字轉錄結果 */}
+                                                            <p className="text-sm">{msg.text}</p>
+                                                            {/* 播放按鈕 */}
+                                                            <button
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        const audioBytes = Uint8Array.from(atob(msg.audioData!), c => c.charCodeAt(0));
+                                                                        const audioBlob = new Blob([audioBytes], { type: 'audio/webm;codecs=opus' });
+                                                                        const audioUrl = URL.createObjectURL(audioBlob);
+                                                                        const audio = new Audio(audioUrl);
+
+                                                                        audio.onended = () => URL.revokeObjectURL(audioUrl);
+
+                                                                        try {
+                                                                            await audio.play();
+                                                                            console.log('✅ Audio playing successfully');
+                                                                        } catch (playErr) {
+                                                                            console.warn('⚠️ Primary format failed, trying fallback...', playErr);
+                                                                            // 嘗試使用備用格式
+                                                                            URL.revokeObjectURL(audioUrl);
+                                                                            const fallbackBlob = new Blob([audioBytes], { type: 'audio/ogg;codecs=opus' });
+                                                                            const fallbackUrl = URL.createObjectURL(fallbackBlob);
+                                                                            const fallbackAudio = new Audio(fallbackUrl);
+                                                                            fallbackAudio.onended = () => URL.revokeObjectURL(fallbackUrl);
+                                                                            await fallbackAudio.play();
+                                                                            console.log('✅ Audio playing with fallback format');
+                                                                        }
+                                                                    } catch (err) {
+                                                                        console.error('❌ Failed to play audio:', err);
+                                                                        alert('無法播放音訊，瀏覽器可能不支援此格式');
+                                                                    }
+                                                                }}
+                                                                className={`flex items-center gap-1 text-sm px-2 py-1 rounded self-start ${
+                                                                    isFromMe
+                                                                        ? 'bg-blue-700 hover:bg-blue-800'
+                                                                        : 'bg-gray-100 hover:bg-gray-200'
+                                                                }`}
+                                                            >
+                                                                <Mic className="w-3 h-3" />
+                                                                <span>播放語音訊息</span>
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-sm">{msg.text}</p>
+                                                    )}
+
+                                                    <div className={`text-xs mt-1 ${isFromMe ? 'text-blue-200' : 'text-gray-500'}`}>
                                                         {formatMessageTime(msg.timestamp)}
                                                     </div>
                                                 </div>
