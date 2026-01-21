@@ -315,98 +315,110 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
         }
     };
 
-    // 開始私人通話
+    // 發送私人通話請求（握手）
     const startPrivateCall = async () => {
         if (!privateTargetId.trim()) {
             alert('請輸入目標設備 ID');
             return;
         }
 
-        // 清空之前累積的轉錄文字
-        finalTranscriptRef.current = '';
-        setCurrentTranscript('');
-
-        // 生成隨機通話 ID
-        const callId = `CALL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        setRandomCallId(callId);
-        setPrivateCallActive(true);
+        // 生成隨機通話 Topic ID
+        const callTopicId = `PRIVATE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        setRandomCallId(callTopicId);
 
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 16000
-                }
+            // 發送 PRIVATE_SPK_REQ 握手請求
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            // 建立握手訊息: Tag + UUID + Data
+            const tag = 'PRIVATE_SPK_REQ';
+            const data = `${privateTargetId},${callTopicId}`;  // "TargetUUID,PrivateTopicID"
+
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            const response = await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
             });
 
-            streamRef.current = stream;
-
-            // 設置音訊分析器
-            if (audioContextRef.current) {
-                const source = audioContextRef.current.createMediaStreamSource(stream);
-                analyserRef.current = audioContextRef.current.createAnalyser();
-                analyserRef.current.fftSize = 256;
-                source.connect(analyserRef.current);
+            if (response.ok) {
+                setPrivateCallActive(true);
+                console.log(`📞 Private call request sent: ${deviceId} → ${privateTargetId} (Topic: ${callTopicId})`);
+                // TODO: 等待對方接受後才開始錄音
+                // 目前先直接進入通話狀態（簡化版）
+            } else {
+                throw new Error('Failed to send call request');
             }
-
-            const mediaRecorder = new MediaRecorder(stream, {
-                mimeType: 'audio/webm;codecs=opus'
-            });
-
-            mediaRecorderRef.current = mediaRecorder;
-            audioChunksRef.current = [];
-
-            mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data);
-                }
-            };
-
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                const arrayBuffer = await audioBlob.arrayBuffer();
-
-                // 使用當前顯示的文字（包含最終和臨時結果）
-                const textToSend = currentTranscript || finalTranscriptRef.current;
-                console.log('📝 Sending private audio with transcript:', {
-                    currentTranscript,
-                    finalTranscript: finalTranscriptRef.current,
-                    willSend: textToSend || '(empty)'
-                });
-                onAudioSend(arrayBuffer, true, callId, textToSend);
-
-                // 清空轉錄文字
-                setCurrentTranscript('');
-                finalTranscriptRef.current = '';
-
-                audioChunksRef.current = [];
-                if (streamRef.current) {
-                    streamRef.current.getTracks().forEach(track => track.stop());
-                    streamRef.current = null;
-                }
-            };
-
-            mediaRecorder.start(100);
-            setIsRecording(true);
-            isRecordingRef.current = true;
-            console.log(`📞 Started private call: ${callId} → ${privateTargetId}`);
 
         } catch (error) {
             console.error('❌ Failed to start private call:', error);
-            alert('無法訪問麥克風');
+            alert('發送通話請求失敗');
             setPrivateCallActive(false);
+            setRandomCallId('');
         }
     };
 
     // 結束私人通話
-    const endPrivateCall = () => {
+    const endPrivateCall = async () => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
         }
         setIsRecording(false);
         isRecordingRef.current = false;
+
+        // 發送 PRIVATE_SPK_STOP 通知對方
+        try {
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            const tag = 'PRIVATE_SPK_STOP';
+            const data = privateTargetId;  // TargetUUID
+
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
+            });
+
+            console.log(`📞 Private call stop sent to ${privateTargetId}`);
+        } catch (error) {
+            console.error('❌ Failed to send call stop:', error);
+        }
+
         setPrivateCallActive(false);
         setRandomCallId('');
         setAudioLevel(0);

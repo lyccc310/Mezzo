@@ -609,6 +609,25 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             setMessages((prev) => [...prev, markNotification]);
                         }
 
+                        // 處理私人通話請求
+                        if (data.type === 'private_call_request') {
+                            console.log('📞 Incoming private call from:', data.from);
+                            const accept = window.confirm(`收到來自 ${data.from} 的通話請求，是否接受？`);
+                            if (accept) {
+                                // TODO: 通知 PTTAudio 組件接受通話
+                                showPTTStatus(`📞 已接受來自 ${data.from} 的通話`, 'success');
+                            } else {
+                                showPTTStatus(`📞 已拒絕來自 ${data.from} 的通話`, 'info');
+                            }
+                        }
+
+                        // 處理私人通話結束
+                        if (data.type === 'private_call_stop') {
+                            console.log('📞 Private call ended by:', data.from);
+                            showPTTStatus(`📞 ${data.from} 已結束通話`, 'info');
+                            // TODO: 通知 PTTAudio 組件結束通話
+                        }
+
                         if (data.type === 'mqtt_message' && data.topic && data.data) {
                             console.log('📡 MQTT message:', data.topic);
                         }
