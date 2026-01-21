@@ -38,6 +38,12 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     const [selectedGroup, setSelectedGroup] = useState<string>('all');
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    // ===== 語音訊息錄製狀態 =====
+    const [isRecordingVoiceMsg, setIsRecordingVoiceMsg] = useState(false);
+    const voiceMsgRecorderRef = useRef<MediaRecorder | null>(null);
+    const voiceMsgChunksRef = useRef<Blob[]>([]);
+    const voiceMsgRecognitionRef = useRef<any>(null);
+
     // ===== PTT 控制狀態 =====
     const [showPTTControl, setShowPTTControl] = useState(false);
     const [pttChannel, setPttChannel] = useState('channel1');
@@ -754,6 +760,130 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
         }
     };
 
+    // ===== 語音訊息錄製功能 =====
+    const startVoiceMessageRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+
+            voiceMsgChunksRef.current = [];
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    voiceMsgChunksRef.current.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = async () => {
+                stream.getTracks().forEach(track => track.stop());
+                await sendVoiceMessage();
+            };
+
+            // 啟動語音識別 (用於轉錄文字)
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+                const recognition = new SpeechRecognition();
+                recognition.lang = 'zh-TW';
+                recognition.continuous = true;
+                recognition.interimResults = false;
+
+                let transcript = '';
+                recognition.onresult = (event: any) => {
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        if (event.results[i].isFinal) {
+                            transcript += event.results[i][0].transcript + ' ';
+                        }
+                    }
+                };
+
+                recognition.onerror = (event: any) => {
+                    console.warn('⚠️ Speech recognition error:', event.error);
+                };
+
+                voiceMsgRecognitionRef.current = { recognition, transcript: () => transcript };
+                recognition.start();
+            }
+
+            voiceMsgRecorderRef.current = mediaRecorder;
+            mediaRecorder.start();
+            setIsRecordingVoiceMsg(true);
+            showPTTStatus('🎙️ 正在錄製語音訊息...', 'info');
+        } catch (error) {
+            console.error('❌ Failed to start voice message recording:', error);
+            showPTTStatus('❌ 無法啟動錄音', 'error');
+        }
+    };
+
+    const stopVoiceMessageRecording = () => {
+        if (voiceMsgRecorderRef.current && voiceMsgRecorderRef.current.state !== 'inactive') {
+            voiceMsgRecorderRef.current.stop();
+        }
+        if (voiceMsgRecognitionRef.current?.recognition) {
+            voiceMsgRecognitionRef.current.recognition.stop();
+        }
+        setIsRecordingVoiceMsg(false);
+    };
+
+    const sendVoiceMessage = async () => {
+        try {
+            const audioBlob = new Blob(voiceMsgChunksRef.current, { type: 'audio/webm;codecs=opus' });
+            const reader = new FileReader();
+
+            reader.onloadend = async () => {
+                const base64Audio = (reader.result as string).split(',')[1];
+                const transcript = voiceMsgRecognitionRef.current?.transcript() || '';
+                const displayText = transcript.trim() || '語音訊息';
+
+                // 決定頻道
+                let channel = pttChannel;
+                if (selectedGroup !== 'all') {
+                    channel = selectedGroup;
+                }
+
+                // 建立語音訊息資料
+                const voiceMessageData = {
+                    text: `💬 ${displayText}`,
+                    audioData: base64Audio,
+                    transcript: transcript
+                };
+
+                // 發送到後端
+                const response = await fetch(`${API_CONFIG.baseUrl}/ptt/voice-message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        channel,
+                        from: pttDeviceId,
+                        to: selectedGroup === 'all' ? 'all' : `group:${selectedGroup}`,
+                        ...voiceMessageData
+                    })
+                });
+
+                if (response.ok) {
+                    // 本地顯示
+                    const localMessage: Message = {
+                        id: `voice-${Date.now()}`,
+                        from: 'COMMAND_CENTER',
+                        to: selectedGroup === 'all' ? 'all' : `group:${selectedGroup}`,
+                        text: voiceMessageData.text,
+                        audioData: base64Audio,
+                        timestamp: new Date().toISOString(),
+                        priority: 3
+                    };
+                    setMessages(prev => [...prev, localMessage]);
+                    showPTTStatus(`✅ 語音訊息已發送`, 'success');
+                } else {
+                    showPTTStatus('❌ 發送語音訊息失敗', 'error');
+                }
+            };
+
+            reader.readAsDataURL(audioBlob);
+        } catch (error) {
+            console.error('❌ Failed to send voice message:', error);
+            showPTTStatus('❌ 發送語音訊息失敗', 'error');
+        }
+    };
+
     // ===== 處理地圖選擇設備 =====
     const handleDeviceSelect = (device: Device) => {
         console.log('📍 Device selected from map:', device.id);
@@ -931,6 +1061,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                         channel={pttChannel}
                         onAudioSend={handleAudioSend}
                         onSpeechToText={handleSpeechToText}
+                        ws={wsRef.current}
                     />
                 </div>
             );
@@ -1209,11 +1340,26 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                     }}
                                     placeholder="輸入訊息..."
                                     className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                                    disabled={isRecordingVoiceMsg}
                                 />
+                                {/* 語音訊息按鈕 */}
+                                <button
+                                    onClick={isRecordingVoiceMsg ? stopVoiceMessageRecording : startVoiceMessageRecording}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                        isRecordingVoiceMsg
+                                            ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+                                            : 'bg-gray-600 hover:bg-gray-700 text-white'
+                                    }`}
+                                    title={isRecordingVoiceMsg ? "停止錄音" : "錄製語音訊息"}
+                                >
+                                    <Mic className="w-4 h-4" />
+                                </button>
+                                {/* 文字訊息按鈕 */}
                                 <button
                                     onClick={handleSendMessage}
-                                    disabled={!messageText.trim()}
+                                    disabled={!messageText.trim() || isRecordingVoiceMsg}
                                     className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                                    title="發送文字訊息"
                                 >
                                     <Send className="w-4 h-4" />
                                 </button>

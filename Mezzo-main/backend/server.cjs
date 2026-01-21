@@ -101,7 +101,8 @@ const pttState = {
   sosAlerts: new Map(),        // SOS 警報
   channelUsers: new Map(),     // 各頻道的使用者
   broadcastedTranscripts: new Set(),  // 追蹤已廣播的轉錄訊息 (避免重複)
-  deviceConnections: new Map()  // 設備 ID → WebSocket 連線對應表（用於私人通話）
+  deviceConnections: new Map(),  // 設備 ID → WebSocket 連線對應表（用於私人通話）
+  channelSpeakers: new Map()   // 頻道 ID → 當前說話者 UUID（搶麥機制）
 };
 
 // 確保 streams 目錄存在
@@ -908,6 +909,102 @@ function handlePTT_PrivateStop(channel, uuid, data) {
   }
 }
 
+/**
+ * 處理 PTT 群組通話「請求發言」(搶麥機制)
+ * Tag: PTT_MSG_TYPE_SPEECH_START
+ */
+function handlePTT_SpeechStart(channel, uuid, data) {
+  try {
+    console.log('🎙️ [PTT_MSG_TYPE_SPEECH_START]', {
+      channel: channel,
+      from: uuid,
+      currentSpeaker: pttState.channelSpeakers.get(channel)
+    });
+
+    const currentSpeaker = pttState.channelSpeakers.get(channel);
+
+    // 檢查是否已有人在說話
+    if (currentSpeaker && currentSpeaker !== uuid) {
+      // 拒絕請求 - 已有人在使用麥克風
+      console.log(`🚫 Speech request denied: ${uuid} (${currentSpeaker} is speaking)`);
+
+      const senderWs = pttState.deviceConnections.get(uuid);
+      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+        senderWs.send(JSON.stringify({
+          type: 'ptt_speech_deny',
+          channel: channel,
+          reason: `${currentSpeaker} 正在使用麥克風`,
+          timestamp: new Date().toISOString()
+        }));
+      }
+
+      return;
+    }
+
+    // 允許請求 - 授予麥克風使用權
+    pttState.channelSpeakers.set(channel, uuid);
+    console.log(`✅ Speech request allowed: ${uuid} on channel ${channel}`);
+
+    // 通知請求者
+    const senderWs = pttState.deviceConnections.get(uuid);
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      senderWs.send(JSON.stringify({
+        type: 'ptt_speech_allow',
+        channel: channel,
+        timestamp: new Date().toISOString()
+      }));
+    }
+
+    // 廣播給所有人：誰正在說話
+    broadcastToClients({
+      type: 'ptt_speaker_update',
+      channel: channel,
+      speaker: uuid,
+      action: 'start',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ PTT SPEECH_START handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT 群組通話「結束發言」
+ * Tag: PTT_MSG_TYPE_SPEECH_STOP
+ */
+function handlePTT_SpeechStop(channel, uuid, data) {
+  try {
+    console.log('🎙️ [PTT_MSG_TYPE_SPEECH_STOP]', {
+      channel: channel,
+      from: uuid
+    });
+
+    const currentSpeaker = pttState.channelSpeakers.get(channel);
+
+    // 只有當前說話者才能結束發言
+    if (currentSpeaker === uuid) {
+      pttState.channelSpeakers.delete(channel);
+      console.log(`🛑 Speech stopped: ${uuid} on channel ${channel}`);
+
+      // 廣播給所有人：發言已結束
+      broadcastToClients({
+        type: 'ptt_speaker_update',
+        channel: channel,
+        speaker: null,
+        action: 'stop',
+        previousSpeaker: uuid,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      console.warn(`⚠️ Unauthorized speech stop attempt: ${uuid} (current: ${currentSpeaker})`);
+    }
+
+  } catch (error) {
+    console.error('❌ PTT SPEECH_STOP handler error:', error);
+  }
+}
+
 // ==================== RTSP 串流管理器 ====================
 
 class StreamManager {
@@ -1207,9 +1304,12 @@ pttMqttClient.on('message', (topic, message) => {
           handlePTT_TextMessage(channel, uuid, data);
         } else if (tag === 'BROADCAST') {
           handlePTT_Broadcast(channel, uuid, tag, data);
+        } else if (tag === 'PTT_MSG_TYPE_SPEECH_START') {
+          handlePTT_SpeechStart(channel, uuid, data);
+        } else if (tag === 'PTT_MSG_TYPE_SPEECH_STOP') {
+          handlePTT_SpeechStop(channel, uuid, data);
         } else if (tag.includes('PTT_MSG_TYPE_SPEECH')) {
-          console.log('🎙️ [PTT SPEECH CONTROL]', tag);
-          // TODO: 語音控制處理
+          console.log('🎙️ [PTT SPEECH CONTROL - UNHANDLED]', tag);
         } else if (tag === 'PRIVATE_SPK_REQ') {
           handlePTT_PrivateRequest(channel, uuid, data);
         } else if (tag === 'PRIVATE_SPK_STOP') {
@@ -2323,6 +2423,52 @@ app.post('/ptt/publish', (req, res) => {
     });
   } catch (error) {
     console.error('❌ PTT publish error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ===== 語音訊息端點 (用於通訊面板的語音訊息功能) =====
+app.post('/ptt/voice-message', (req, res) => {
+  try {
+    const { channel, from, to, text, audioData, transcript } = req.body;
+
+    if (!channel || !from || !audioData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: channel, from, audioData'
+      });
+    }
+
+    console.log(`💬 Voice message from ${from} to ${to} on channel ${channel}`);
+
+    // 建立語音訊息物件
+    const voiceMessage = {
+      type: 'ptt_transcript',
+      message: {
+        id: `voice-${from}-${Date.now()}`,
+        from: from,
+        to: to || 'all',
+        text: text || '💬 語音訊息',
+        audioData: audioData,
+        timestamp: new Date().toISOString(),
+        priority: 3
+      }
+    };
+
+    // 廣播給所有 WebSocket 客戶端
+    broadcastToClients(voiceMessage);
+
+    console.log(`✅ Voice message broadcasted: ${from} → ${to}`);
+
+    res.json({
+      success: true,
+      messageId: voiceMessage.message.id
+    });
+  } catch (error) {
+    console.error('❌ Voice message error:', error);
     res.status(500).json({
       success: false,
       error: error.message
