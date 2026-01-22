@@ -35,6 +35,10 @@ docker compose up -d
 ```bash
 docker compose restart
 ```
+結束工作指令:
+```bash
+docker compose down
+```
 ---
 ## 測試FTS是否建立成功
 - Step1: 打開 Wintak 並註冊連線
