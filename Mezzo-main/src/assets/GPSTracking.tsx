@@ -38,6 +38,12 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     const [selectedGroup, setSelectedGroup] = useState<string>('all');
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    // ===== 語音訊息錄製狀態 =====
+    const [isRecordingVoiceMsg, setIsRecordingVoiceMsg] = useState(false);
+    const voiceMsgRecorderRef = useRef<MediaRecorder | null>(null);
+    const voiceMsgChunksRef = useRef<Blob[]>([]);
+    const voiceMsgRecognitionRef = useRef<any>(null);
+
     // ===== PTT 控制狀態 =====
     const [showPTTControl, setShowPTTControl] = useState(false);
     const [pttChannel, setPttChannel] = useState('channel1');
@@ -319,16 +325,22 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
             const message = Array.from(combined);
 
-            // 發送到後端（包含轉錄文字）
+            // 發送到後端（只有語音訊息才包含轉錄文字）
+            const requestBody: any = {
+                topic,
+                message,
+                encoding: 'binary'
+            };
+
+            // 只在有實際轉錄內容時才加入 transcript 參數（語音訊息），群組 PTT 不加入
+            if (transcript && transcript.trim()) {
+                requestBody.transcript = transcript;
+            }
+
             const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    topic,
-                    message,
-                    encoding: 'binary',
-                    transcript: transcript || ''  // 新增轉錄文字
-                })
+                body: JSON.stringify(requestBody)
             });
 
             if (response.ok) {
@@ -436,6 +448,14 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                     console.log('✅ WebSocket connected');
                     setWsConnected(true);
                     reconnectAttemptsRef.current = 0;
+
+                    // 註冊設備 ID（用於私人通話）
+                    ws.send(JSON.stringify({
+                        type: 'register_device',
+                        deviceId: pttDeviceId
+                    }));
+                    console.log(`📱 Registering device: ${pttDeviceId}`);
+
                     ws.send(JSON.stringify({ type: 'request_devices' }));
 
                     const heartbeat = setInterval(() => {
@@ -601,6 +621,25 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             setMessages((prev) => [...prev, markNotification]);
                         }
 
+                        // 處理私人通話請求
+                        if (data.type === 'private_call_request') {
+                            console.log('📞 Incoming private call from:', data.from);
+                            const accept = window.confirm(`收到來自 ${data.from} 的通話請求，是否接受？`);
+                            if (accept) {
+                                // TODO: 通知 PTTAudio 組件接受通話
+                                showPTTStatus(`📞 已接受來自 ${data.from} 的通話`, 'success');
+                            } else {
+                                showPTTStatus(`📞 已拒絕來自 ${data.from} 的通話`, 'info');
+                            }
+                        }
+
+                        // 處理私人通話結束
+                        if (data.type === 'private_call_stop') {
+                            console.log('📞 Private call ended by:', data.from);
+                            showPTTStatus(`📞 ${data.from} 已結束通話`, 'info');
+                            // TODO: 通知 PTTAudio 組件結束通話
+                        }
+
                         if (data.type === 'mqtt_message' && data.topic && data.data) {
                             console.log('📡 MQTT message:', data.topic);
                         }
@@ -724,6 +763,150 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
         } catch (error) {
             console.error('❌ Send message error:', error);
             showPTTStatus('❌ 發送訊息失敗', 'error');
+        }
+    };
+
+    // ===== 語音訊息錄製功能 =====
+    const startVoiceMessageRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+
+            voiceMsgChunksRef.current = [];
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    voiceMsgChunksRef.current.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = async () => {
+                stream.getTracks().forEach(track => track.stop());
+                await sendVoiceMessage();
+            };
+
+            // 啟動語音識別 (用於轉錄文字)
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+                const recognition = new SpeechRecognition();
+                recognition.lang = 'zh-TW';
+                recognition.continuous = true;
+                recognition.interimResults = false;
+
+                let transcript = '';
+                recognition.onresult = (event: any) => {
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        if (event.results[i].isFinal) {
+                            const newText = event.results[i][0].transcript;
+                            transcript += newText + ' ';
+                            console.log('🎤 Speech recognized:', newText, '| Total:', transcript);
+                        }
+                    }
+                };
+
+                recognition.onerror = (event: any) => {
+                    console.warn('⚠️ Speech recognition error:', event.error);
+                };
+
+                recognition.onstart = () => {
+                    console.log('🎤 Speech recognition started for voice message');
+                };
+
+                recognition.onend = () => {
+                    console.log('🎤 Speech recognition ended. Final transcript:', transcript);
+                };
+
+                voiceMsgRecognitionRef.current = { recognition, transcript: () => transcript };
+                recognition.start();
+                console.log('🎤 Voice message recording started with speech recognition');
+            } else {
+                console.warn('⚠️ Speech recognition not supported in this browser');
+            }
+
+            voiceMsgRecorderRef.current = mediaRecorder;
+            mediaRecorder.start();
+            setIsRecordingVoiceMsg(true);
+            showPTTStatus('🎙️ 正在錄製語音訊息...', 'info');
+        } catch (error) {
+            console.error('❌ Failed to start voice message recording:', error);
+            showPTTStatus('❌ 無法啟動錄音', 'error');
+        }
+    };
+
+    const stopVoiceMessageRecording = () => {
+        if (voiceMsgRecorderRef.current && voiceMsgRecorderRef.current.state !== 'inactive') {
+            voiceMsgRecorderRef.current.stop();
+        }
+        if (voiceMsgRecognitionRef.current?.recognition) {
+            voiceMsgRecognitionRef.current.recognition.stop();
+        }
+        setIsRecordingVoiceMsg(false);
+    };
+
+    const sendVoiceMessage = async () => {
+        try {
+            const audioBlob = new Blob(voiceMsgChunksRef.current, { type: 'audio/webm;codecs=opus' });
+            const reader = new FileReader();
+
+            reader.onloadend = async () => {
+                const base64Audio = (reader.result as string).split(',')[1];
+                const transcript = voiceMsgRecognitionRef.current?.transcript() || '';
+                const displayText = transcript.trim() || '語音訊息';
+
+                console.log('📝 Voice message transcript:', {
+                    raw: transcript,
+                    trimmed: transcript.trim(),
+                    displayText,
+                    hasRecognition: !!voiceMsgRecognitionRef.current
+                });
+
+                // 決定頻道
+                let channel = pttChannel;
+                if (selectedGroup !== 'all') {
+                    channel = selectedGroup;
+                }
+
+                // 建立語音訊息資料
+                const voiceMessageData = {
+                    text: `💬 ${displayText}`,
+                    audioData: base64Audio,
+                    transcript: transcript
+                };
+
+                console.log('📤 Sending voice message:', {
+                    channel,
+                    from: pttDeviceId,
+                    to: selectedGroup === 'all' ? 'all' : `group:${selectedGroup}`,
+                    textLength: voiceMessageData.text.length,
+                    hasAudio: !!base64Audio,
+                    transcriptLength: transcript.length
+                });
+
+                // 發送到後端
+                const response = await fetch(`${API_CONFIG.baseUrl}/ptt/voice-message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        channel,
+                        from: pttDeviceId,
+                        to: selectedGroup === 'all' ? 'all' : `group:${selectedGroup}`,
+                        ...voiceMessageData
+                    })
+                });
+
+                if (response.ok) {
+                    // 不需要本地顯示，後端會透過 WebSocket 廣播回來
+                    showPTTStatus(`✅ 語音訊息已發送 ${transcript ? `(含文字: ${displayText.substring(0, 20)}...)` : '(純音訊)'}`, 'success');
+                    console.log('📤 Voice message sent, waiting for WebSocket broadcast...');
+                } else {
+                    showPTTStatus('❌ 發送語音訊息失敗', 'error');
+                }
+            };
+
+            reader.readAsDataURL(audioBlob);
+        } catch (error) {
+            console.error('❌ Failed to send voice message:', error);
+            showPTTStatus('❌ 發送語音訊息失敗', 'error');
         }
     };
 
@@ -904,6 +1087,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                         channel={pttChannel}
                         onAudioSend={handleAudioSend}
                         onSpeechToText={handleSpeechToText}
+                        ws={wsRef.current}
                     />
                 </div>
             );
@@ -1182,11 +1366,26 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                     }}
                                     placeholder="輸入訊息..."
                                     className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                                    disabled={isRecordingVoiceMsg}
                                 />
+                                {/* 語音訊息按鈕 */}
+                                <button
+                                    onClick={isRecordingVoiceMsg ? stopVoiceMessageRecording : startVoiceMessageRecording}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                        isRecordingVoiceMsg
+                                            ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+                                            : 'bg-gray-600 hover:bg-gray-700 text-white'
+                                    }`}
+                                    title={isRecordingVoiceMsg ? "停止錄音" : "錄製語音訊息"}
+                                >
+                                    <Mic className="w-4 h-4" />
+                                </button>
+                                {/* 文字訊息按鈕 */}
                                 <button
                                     onClick={handleSendMessage}
-                                    disabled={!messageText.trim()}
+                                    disabled={!messageText.trim() || isRecordingVoiceMsg}
                                     className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                                    title="發送文字訊息"
                                 >
                                     <Send className="w-4 h-4" />
                                 </button>

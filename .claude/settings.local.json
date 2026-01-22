@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nrefactor: 移除重複的 PTT 測試工具\n\n- 刪除 test_ptt_communication.html \\(功能已由 PTTCommunication.tsx 取代\\)\n- 刪除 PttControl.tsx \\(功能已整合到 GPSTracking.tsx 中\\)\n- 保留 PTTCommunication.tsx 作為獨立測試工具\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: 實作 PTT 群組語音和私人通話功能\n\n主要功能:\n1. 後端 SPEECH 和 PRIVATE 音訊處理\n   - handlePTT_SPEECH: 群組語音廣播\n   - handlePTT_PRIVATE: 私人一對一通話\n   - 支援音訊封包透過 WebSocket 即時傳輸\n\n2. 前端 PTTAudio 組件\n   - 麥克風錄音功能 \\(MediaRecorder API\\)\n   - 即時音訊電平監控 \\(AudioContext\\)\n   - 群組 PTT 按鍵控制 \\(按住發話\\)\n   - 私人通話管理 \\(RandomID 生成\\)\n   - 音訊參數優化 \\(16kHz, Opus, WebM\\)\n\n3. GPSTracking 整合\n   - 替換原「待實作」區塊\n   - 新增 handleAudioSend 函數\n   - 支援群組和私人模式切換\n\n4. 文檔\n   - PTT_AUDIO_GUIDE.md 完整使用指南\n   - 包含技術架構、訊息格式、測試方式\n\n技術細節:\n- 音訊格式: WebM + Opus 編碼\n- 採樣率: 16kHz \\(語音優化\\)\n- 傳輸: MQTT → WebSocket → 客戶端\n- 封包結構: Tag\\(32\\) + UUID\\(128\\) + AudioData\\(variable\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(node:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git merge:*)"
+    ]
+  }
+}

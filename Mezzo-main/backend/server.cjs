@@ -100,7 +100,9 @@ const pttState = {
   activeUsers: new Map(),      // 活躍的 PTT 使用者
   sosAlerts: new Map(),        // SOS 警報
   channelUsers: new Map(),     // 各頻道的使用者
-  broadcastedTranscripts: new Set()  // 追蹤已廣播的轉錄訊息 (避免重複)
+  broadcastedTranscripts: new Set(),  // 追蹤已廣播的轉錄訊息 (避免重複)
+  deviceConnections: new Map(),  // 設備 ID → WebSocket 連線對應表（用於私人通話）
+  channelSpeakers: new Map()   // 頻道 ID → 當前說話者 UUID（搶麥機制）
 };
 
 // 確保 streams 目錄存在
@@ -767,15 +769,15 @@ function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
  */
 function handlePTT_PRIVATE(topic, channel, uuid, tag, audioBuffer) {
   try {
-    // 從 topic 中提取 RandomID
-    // 格式: /WJI/PTT/{Channel}/PRIVATE/{RandomID}
+    // 從 topic 中提取目標設備 ID
+    // 格式: /WJI/PTT/{Channel}/PRIVATE/{TargetDeviceId}
     const parts = topic.split('/');
-    const randomId = parts[parts.length - 1];
+    const targetDeviceId = parts[parts.length - 1];
 
     console.log('📞 [PTT PRIVATE]', {
       channel,
-      uuid,
-      randomId,
+      from: uuid,
+      to: targetDeviceId,
       tag,
       audioSize: audioBuffer.length
     });
@@ -785,23 +787,295 @@ function handlePTT_PRIVATE(topic, channel, uuid, tag, audioBuffer) {
       id: `private-${uuid}-${Date.now()}`,
       type: 'private',
       channel: channel,
-      randomId: randomId,  // 私人通話的唯一 ID
       from: uuid,
+      to: targetDeviceId,  // 目標設備 ID
       timestamp: new Date().toISOString(),
       audioData: audioBuffer.toString('base64'),
       tag: tag
     };
 
-    // 廣播到所有客戶端（客戶端需要根據 randomId 過濾）
-    broadcastToClients({
-      type: 'ptt_audio',
-      packet: audioPacket
-    });
+    // 只發給目標設備（點對點）
+    const targetWs = pttState.deviceConnections.get(targetDeviceId);
+    const senderWs = pttState.deviceConnections.get(uuid);
 
-    console.log(`📞 PRIVATE broadcasted: ${uuid} → ${randomId} (${audioBuffer.length} bytes)`);
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify({
+        type: 'ptt_audio',
+        packet: audioPacket
+      }));
+      console.log(`📞 PRIVATE sent to target: ${uuid} → ${targetDeviceId}`);
+    } else {
+      console.log(`⚠️ Target device ${targetDeviceId} not connected`);
+    }
+
+    // 也發給發送者自己（讓發送者知道音訊已發送）
+    if (senderWs && senderWs.readyState === WebSocket.OPEN && uuid !== targetDeviceId) {
+      senderWs.send(JSON.stringify({
+        type: 'ptt_audio',
+        packet: audioPacket
+      }));
+      console.log(`📞 PRIVATE echo to sender: ${uuid}`);
+    }
 
   } catch (error) {
     console.error('❌ PTT PRIVATE handler error:', error);
+  }
+}
+
+/**
+ * 處理私人通話請求 (握手)
+ */
+function handlePTT_PrivateRequest(channel, uuid, data) {
+  try {
+    // Data 格式: "TargetUUID,PrivateTopicID"
+    const [targetUUID, privateTopicID] = data.split(',');
+
+    console.log('📞 [PRIVATE_SPK_REQ]', {
+      from: uuid,
+      to: targetUUID,
+      privateTopicID: privateTopicID
+    });
+
+    // 建立通話請求訊息
+    const callRequest = {
+      type: 'private_call_request',
+      from: uuid,
+      to: targetUUID,
+      privateTopicID: privateTopicID,
+      channel: channel,
+      timestamp: new Date().toISOString()
+    };
+
+    // 只發給目標設備
+    const targetWs = pttState.deviceConnections.get(targetUUID);
+    const senderWs = pttState.deviceConnections.get(uuid);
+
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify(callRequest));
+      console.log(`📞 Private call request sent: ${uuid} → ${targetUUID} (Topic: ${privateTopicID})`);
+    } else {
+      console.log(`⚠️ Target device ${targetUUID} not connected`);
+    }
+
+    // 通知發送者請求已發送
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      senderWs.send(JSON.stringify({
+        type: 'private_call_request_sent',
+        to: targetUUID,
+        privateTopicID: privateTopicID
+      }));
+    }
+
+  } catch (error) {
+    console.error('❌ PTT PRIVATE_SPK_REQ handler error:', error);
+  }
+}
+
+/**
+ * 處理私人通話結束
+ */
+function handlePTT_PrivateStop(channel, uuid, data) {
+  try {
+    const targetUUID = data.trim();
+
+    console.log('📞 [PRIVATE_SPK_STOP]', {
+      channel: channel,
+      from: uuid,
+      to: targetUUID
+    });
+
+    // 通知雙方結束通話
+    const targetWs = pttState.deviceConnections.get(targetUUID);
+    const senderWs = pttState.deviceConnections.get(uuid);
+
+    const stopMessage = {
+      type: 'private_call_stop',
+      from: uuid,
+      to: targetUUID,
+      timestamp: new Date().toISOString()
+    };
+
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify(stopMessage));
+      console.log(`📞 Private call stopped: ${uuid} → ${targetUUID}`);
+    }
+
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      senderWs.send(JSON.stringify(stopMessage));
+    }
+
+  } catch (error) {
+    console.error('❌ PTT PRIVATE_SPK_STOP handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT 群組通話「請求發言」(搶麥請求機制 - 需要當前說話者同意)
+ * Tag: PTT_MSG_TYPE_SPEECH_START
+ */
+function handlePTT_SpeechStart(channel, uuid, data) {
+  try {
+    console.log('🎙️ [PTT_MSG_TYPE_SPEECH_START]', {
+      channel: channel,
+      from: uuid,
+      currentSpeaker: pttState.channelSpeakers.get(channel)
+    });
+
+    const currentSpeaker = pttState.channelSpeakers.get(channel);
+
+    // 檢查是否已有人在說話
+    if (currentSpeaker && currentSpeaker !== uuid) {
+      // 發送搶麥請求給當前說話者
+      console.log(`🔔 Sending mic request from ${uuid} to current speaker ${currentSpeaker}`);
+
+      const currentSpeakerWs = pttState.deviceConnections.get(currentSpeaker);
+      if (currentSpeakerWs && currentSpeakerWs.readyState === WebSocket.OPEN) {
+        currentSpeakerWs.send(JSON.stringify({
+          type: 'ptt_mic_request',
+          channel: channel,
+          requester: uuid,
+          currentSpeaker: currentSpeaker,
+          timestamp: new Date().toISOString()
+        }));
+        console.log(`📞 Mic request sent to ${currentSpeaker}`);
+      }
+
+      // 通知請求者：已發送請求，等待回應
+      const requesterWs = pttState.deviceConnections.get(uuid);
+      if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
+        requesterWs.send(JSON.stringify({
+          type: 'ptt_mic_request_sent',
+          channel: channel,
+          currentSpeaker: currentSpeaker,
+          timestamp: new Date().toISOString()
+        }));
+      }
+
+      return;
+    }
+
+    // 沒有人在使用，直接允許
+    pttState.channelSpeakers.set(channel, uuid);
+    console.log(`✅ Speech request allowed: ${uuid} on channel ${channel}`);
+
+    // 通知請求者
+    const senderWs = pttState.deviceConnections.get(uuid);
+    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+      senderWs.send(JSON.stringify({
+        type: 'ptt_speech_allow',
+        channel: channel,
+        timestamp: new Date().toISOString()
+      }));
+    }
+
+    // 廣播給所有人：誰正在說話
+    broadcastToClients({
+      type: 'ptt_speaker_update',
+      channel: channel,
+      speaker: uuid,
+      action: 'start',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ PTT SPEECH_START handler error:', error);
+  }
+}
+
+/**
+ * 處理搶麥請求的回應 (同意或拒絕)
+ * Tag: PTT_MSG_TYPE_MIC_RESPONSE
+ */
+function handlePTT_MicResponse(channel, uuid, data) {
+  try {
+    // data 格式: "requesterUUID,accept/deny"
+    const [requesterUUID, response] = data.split(',');
+
+    console.log('🔔 [PTT_MSG_TYPE_MIC_RESPONSE]', {
+      channel: channel,
+      from: uuid,
+      requester: requesterUUID,
+      response: response
+    });
+
+    const requesterWs = pttState.deviceConnections.get(requesterUUID);
+    const currentSpeaker = pttState.channelSpeakers.get(channel);
+
+    if (response === 'accept') {
+      // 當前說話者同意讓出麥克風
+      pttState.channelSpeakers.set(channel, requesterUUID);
+      console.log(`✅ Mic handed over: ${uuid} → ${requesterUUID}`);
+
+      // 通知請求者：已獲得麥克風
+      if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
+        requesterWs.send(JSON.stringify({
+          type: 'ptt_speech_allow',
+          channel: channel,
+          timestamp: new Date().toISOString()
+        }));
+      }
+
+      // 廣播給所有人：新的說話者
+      broadcastToClients({
+        type: 'ptt_speaker_update',
+        channel: channel,
+        speaker: requesterUUID,
+        action: 'start',
+        previousSpeaker: uuid,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      // 拒絕請求
+      console.log(`🚫 Mic request denied: ${uuid} refused ${requesterUUID}`);
+
+      if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
+        requesterWs.send(JSON.stringify({
+          type: 'ptt_speech_deny',
+          channel: channel,
+          reason: `${uuid} 拒絕讓出麥克風`,
+          timestamp: new Date().toISOString()
+        }));
+      }
+    }
+
+  } catch (error) {
+    console.error('❌ PTT MIC_RESPONSE handler error:', error);
+  }
+}
+
+/**
+ * 處理 PTT 群組通話「結束發言」
+ * Tag: PTT_MSG_TYPE_SPEECH_STOP
+ */
+function handlePTT_SpeechStop(channel, uuid, data) {
+  try {
+    console.log('🎙️ [PTT_MSG_TYPE_SPEECH_STOP]', {
+      channel: channel,
+      from: uuid
+    });
+
+    const currentSpeaker = pttState.channelSpeakers.get(channel);
+
+    // 只有當前說話者才能結束發言
+    if (currentSpeaker === uuid) {
+      pttState.channelSpeakers.delete(channel);
+      console.log(`🛑 Speech stopped: ${uuid} on channel ${channel}`);
+
+      // 廣播給所有人：發言已結束
+      broadcastToClients({
+        type: 'ptt_speaker_update',
+        channel: channel,
+        speaker: null,
+        action: 'stop',
+        previousSpeaker: uuid,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      console.warn(`⚠️ Unauthorized speech stop attempt: ${uuid} (current: ${currentSpeaker})`);
+    }
+
+  } catch (error) {
+    console.error('❌ PTT SPEECH_STOP handler error:', error);
   }
 }
 
@@ -1104,12 +1378,20 @@ pttMqttClient.on('message', (topic, message) => {
           handlePTT_TextMessage(channel, uuid, data);
         } else if (tag === 'BROADCAST') {
           handlePTT_Broadcast(channel, uuid, tag, data);
+        } else if (tag === 'PTT_MSG_TYPE_SPEECH_START') {
+          handlePTT_SpeechStart(channel, uuid, data);
+        } else if (tag === 'PTT_MSG_TYPE_SPEECH_STOP') {
+          handlePTT_SpeechStop(channel, uuid, data);
+        } else if (tag === 'PTT_MSG_TYPE_MIC_RESPONSE') {
+          handlePTT_MicResponse(channel, uuid, data);
         } else if (tag.includes('PTT_MSG_TYPE_SPEECH')) {
-          console.log('🎙️ [PTT SPEECH CONTROL]', tag);
-          // TODO: 語音控制處理
+          console.log('🎙️ [PTT SPEECH CONTROL - UNHANDLED]', tag);
+        } else if (tag === 'PRIVATE_SPK_REQ') {
+          handlePTT_PrivateRequest(channel, uuid, data);
+        } else if (tag === 'PRIVATE_SPK_STOP') {
+          handlePTT_PrivateStop(channel, uuid, data);
         } else if (tag.includes('PRIVATE_SPK')) {
-          console.log('📞 [PTT PRIVATE CALL CONTROL]', tag);
-          // TODO: 私人通話控制處理
+          console.log('📞 [PTT PRIVATE CALL CONTROL]', tag, data);
         } else {
           // 其他未知的 CHANNEL_ANNOUNCE 訊息
           handlePTT_Broadcast(channel, uuid, tag, data);
@@ -1190,6 +1472,11 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
+    // 從設備連線表中移除
+    if (ws.deviceId) {
+      pttState.deviceConnections.delete(ws.deviceId);
+      console.log(`📱 Device unregistered: ${ws.deviceId}`);
+    }
     console.log(`🔌 WebSocket client disconnected from ${clientIp}`);
     console.log(`   Remaining clients: ${wss.clients.size}`);
   });
@@ -1221,6 +1508,15 @@ function broadcastToClients(data) {
 
 function handleWebSocketMessage(ws, data) {
   switch (data.type) {
+    case 'register_device':
+      // 前端註冊設備 ID（用於私人通話）
+      if (data.deviceId) {
+        pttState.deviceConnections.set(data.deviceId, ws);
+        ws.deviceId = data.deviceId;  // 將 deviceId 附加到 ws 物件
+        console.log(`📱 Device registered: ${data.deviceId} (Total: ${pttState.deviceConnections.size})`);
+      }
+      break;
+
     case 'send_command':
       mqttClient.publish(
         data.topic || MQTT_CONFIG.topics.CAMERA_CONTROL,
@@ -2203,6 +2499,52 @@ app.post('/ptt/publish', (req, res) => {
     });
   } catch (error) {
     console.error('❌ PTT publish error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ===== 語音訊息端點 (用於通訊面板的語音訊息功能) =====
+app.post('/ptt/voice-message', (req, res) => {
+  try {
+    const { channel, from, to, text, audioData, transcript } = req.body;
+
+    if (!channel || !from || !audioData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: channel, from, audioData'
+      });
+    }
+
+    console.log(`💬 Voice message from ${from} to ${to} on channel ${channel}`);
+
+    // 建立語音訊息物件
+    const voiceMessage = {
+      type: 'ptt_transcript',
+      message: {
+        id: `voice-${from}-${Date.now()}`,
+        from: from,
+        to: to || 'all',
+        text: text || '💬 語音訊息',
+        audioData: audioData,
+        timestamp: new Date().toISOString(),
+        priority: 3
+      }
+    };
+
+    // 廣播給所有 WebSocket 客戶端
+    broadcastToClients(voiceMessage);
+
+    console.log(`✅ Voice message broadcasted: ${from} → ${to}`);
+
+    res.json({
+      success: true,
+      messageId: voiceMessage.message.id
+    });
+  } catch (error) {
+    console.error('❌ Voice message error:', error);
     res.status(500).json({
       success: false,
       error: error.message

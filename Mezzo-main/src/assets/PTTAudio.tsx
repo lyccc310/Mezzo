@@ -6,6 +6,7 @@ interface PTTAudioProps {
     channel: string;
     onAudioSend: (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string, transcript?: string) => void;
     onSpeechToText?: (text: string) => void;  // 語音轉文字回調（即時顯示用）
+    ws?: WebSocket | null;  // WebSocket 連線（用於接收 PTT 權限訊息）
 }
 
 interface AudioPacket {
@@ -18,11 +19,16 @@ interface AudioPacket {
     randomId?: string;
 }
 
-const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioProps) => {
+const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAudioProps) => {
     // 錄音狀態
     const [isRecording, setIsRecording] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const [audioLevel, setAudioLevel] = useState(0);
+
+    // PTT 搶麥狀態
+    const [requestingMic, setRequestingMic] = useState(false);  // 正在請求麥克風
+    const [hasPermission, setHasPermission] = useState(false);  // 已獲得麥克風權限
+    const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);  // 當前頻道誰在說話
 
     // 私人通話狀態
     const [privateCallActive, setPrivateCallActive] = useState(false);
@@ -186,8 +192,166 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
         };
     }, [isRecording, autoSend, silenceThreshold, silenceDuration, privateCallActive]);
 
-    // 開始群組錄音
+    // 監聽 WebSocket 的 PTT 權限訊息
+    useEffect(() => {
+        if (!ws) return;
+
+        const handleMessage = (event: MessageEvent) => {
+            try {
+                const data = JSON.parse(event.data);
+
+                // 收到允許發言
+                if (data.type === 'ptt_speech_allow' && data.channel === channel) {
+                    console.log('✅ PTT permission granted');
+                    setRequestingMic(false);
+                    setHasPermission(true);
+                    // 立即開始錄音
+                    actuallyStartRecording();
+                }
+
+                // 收到拒絕發言
+                if (data.type === 'ptt_speech_deny' && data.channel === channel) {
+                    console.log('🚫 PTT permission denied:', data.reason);
+                    setRequestingMic(false);
+                    setHasPermission(false);
+                    alert(`無法取得麥克風：${data.reason || '已有人在使用'}`);
+                }
+
+                // 收到請求已發送通知
+                if (data.type === 'ptt_mic_request_sent' && data.channel === channel) {
+                    console.log(`⏳ Mic request sent to ${data.currentSpeaker}, waiting for response...`);
+                    // 保持 requestingMic 狀態，顯示等待中
+                }
+
+                // 收到搶麥請求（有人想要搶我的麥克風）
+                if (data.type === 'ptt_mic_request' && data.channel === channel && data.currentSpeaker === deviceId) {
+                    console.log(`🔔 Mic request from ${data.requester}`);
+                    const accept = window.confirm(`${data.requester} 想要發言，是否讓出麥克風？`);
+
+                    // 發送回應
+                    sendMicResponse(data.requester, accept);
+
+                    if (accept) {
+                        // 停止自己的錄音
+                        stopGroupRecording();
+                    }
+                }
+
+                // 收到說話者更新（誰在說話）
+                if (data.type === 'ptt_speaker_update' && data.channel === channel) {
+                    if (data.action === 'start') {
+                        setCurrentSpeaker(data.speaker);
+                        console.log(`🎙️ ${data.speaker} is now speaking`);
+                    } else if (data.action === 'stop') {
+                        setCurrentSpeaker(null);
+                        console.log(`🛑 ${data.previousSpeaker} stopped speaking`);
+                    }
+                }
+            } catch (error) {
+                // Ignore parse errors for non-JSON messages
+            }
+        };
+
+        ws.addEventListener('message', handleMessage);
+
+        return () => {
+            ws.removeEventListener('message', handleMessage);
+        };
+    }, [ws, channel, deviceId]);
+
+    // 請求發言權限（群組通話的搶麥機制）
     const startGroupRecording = async () => {
+        try {
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            console.log('🎙️ Requesting PTT permission...');
+            setRequestingMic(true);
+
+            // 建立 PTT_MSG_TYPE_SPEECH_START 訊息
+            const tag = 'PTT_MSG_TYPE_SPEECH_START';
+            const data = '';  // 無需額外資料
+
+            // 建立 PTT 訊息格式: Tag(32) + UUID(128) + Data
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            // 發送請求到後端
+            const response = await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
+            });
+
+            if (!response.ok) {
+                setRequestingMic(false);
+                alert('請求發言權限失敗');
+            }
+
+            // 等待 WebSocket 回應 (在 useEffect 中處理)
+            console.log('⏳ Waiting for PTT permission response...');
+
+        } catch (error) {
+            console.error('❌ Failed to request PTT permission:', error);
+            setRequestingMic(false);
+            alert('無法請求發言權限');
+        }
+    };
+
+    // 發送搶麥回應（同意或拒絕讓出麥克風）
+    const sendMicResponse = async (requesterUUID: string, accept: boolean) => {
+        try {
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            const tag = 'PTT_MSG_TYPE_MIC_RESPONSE';
+            const data = `${requesterUUID},${accept ? 'accept' : 'deny'}`;
+
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
+            });
+
+            console.log(`📤 Mic response sent: ${accept ? 'accept' : 'deny'} to ${requesterUUID}`);
+        } catch (error) {
+            console.error('❌ Failed to send mic response:', error);
+        }
+    };
+
+    // 實際開始錄音（內部函數，權限獲得後調用）
+    const actuallyStartRecording = async () => {
         try {
             // 清空之前累積的轉錄文字
             finalTranscriptRef.current = '';
@@ -230,19 +394,9 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 const arrayBuffer = await audioBlob.arrayBuffer();
 
-                // 使用當前顯示的文字（包含最終和臨時結果）
-                // 因為有時候語音識別還沒來得及標記為 final 就被停止了
-                const textToSend = currentTranscript || finalTranscriptRef.current;
-                console.log('📝 Sending audio with transcript:', {
-                    currentTranscript,
-                    finalTranscript: finalTranscriptRef.current,
-                    willSend: textToSend || '(empty)'
-                });
-                onAudioSend(arrayBuffer, false, undefined, textToSend);
-
-                // 清空轉錄文字
-                setCurrentTranscript('');
-                finalTranscriptRef.current = '';
+                // 群組通話：不發送轉譯文字，只發送音訊
+                console.log('📝 Sending group PTT audio (no transcript)');
+                onAudioSend(arrayBuffer, false, undefined, undefined);
 
                 // 清理
                 audioChunksRef.current = [];
@@ -256,30 +410,8 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
             setIsRecording(true);
             isRecordingRef.current = true;
 
-            // 啟動語音識別
-            if (recognitionRef.current) {
-                try {
-                    // 先嘗試停止（如果正在運行）
-                    if (speechRecognitionEnabled) {
-                        recognitionRef.current.stop();
-                    }
-                    // 等待一下再啟動
-                    setTimeout(() => {
-                        try {
-                            recognitionRef.current.start();
-                            console.log('🎤 Starting speech recognition...');
-                        } catch (err) {
-                            console.warn('⚠️ Speech recognition start failed:', err);
-                        }
-                    }, 100);
-                } catch (err) {
-                    console.warn('⚠️ Speech recognition stop failed:', err);
-                }
-            } else {
-                console.warn('⚠️ Speech recognition not initialized');
-            }
-
-            console.log('🎙️ Started group recording');
+            // 群組通話不啟動語音識別（即時對講，不需要轉譯）
+            console.log('🎙️ Started group PTT recording (no speech recognition)');
 
         } catch (error) {
             console.error('❌ Failed to start recording:', error);
@@ -288,22 +420,15 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
     };
 
     // 停止群組錄音
-    const stopGroupRecording = () => {
+    const stopGroupRecording = async () => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
             setIsRecording(false);
             isRecordingRef.current = false;
             setAudioLevel(0);
+            setHasPermission(false);  // 釋放麥克風權限
 
-            // 停止語音識別
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.stop();
-                    console.log('🎤 Speech recognition stopped');
-                } catch (err) {
-                    console.warn('⚠️ Speech recognition stop failed:', err);
-                }
-            }
+            // 群組通話不使用語音識別，不需要停止
 
             // 清除靜音計時器
             if (silenceTimerRef.current) {
@@ -311,102 +436,150 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
                 silenceTimerRef.current = null;
             }
 
+            // 發送 PTT_MSG_TYPE_SPEECH_STOP 通知後端釋放麥克風
+            try {
+                const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+                const tag = 'PTT_MSG_TYPE_SPEECH_STOP';
+                const data = '';
+
+                const tagBuffer = new Uint8Array(32);
+                const tagBytes = new TextEncoder().encode(tag);
+                tagBuffer.set(tagBytes.slice(0, 32));
+
+                const uuidBuffer = new Uint8Array(128);
+                const uuidBytes = new TextEncoder().encode(deviceId);
+                uuidBuffer.set(uuidBytes.slice(0, 128));
+
+                const dataBytes = new TextEncoder().encode(data);
+                const combined = new Uint8Array(160 + dataBytes.length);
+                combined.set(tagBuffer, 0);
+                combined.set(uuidBuffer, 32);
+                combined.set(dataBytes, 160);
+
+                await fetch(`${API_BASE}/ptt/publish`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                        message: Array.from(combined),
+                        encoding: 'binary'
+                    })
+                });
+
+                console.log('🛑 PTT_MSG_TYPE_SPEECH_STOP sent');
+            } catch (error) {
+                console.error('❌ Failed to send SPEECH_STOP:', error);
+            }
+
             console.log('🎙️ Stopped group recording');
         }
     };
 
-    // 開始私人通話
+    // 發送私人通話請求（握手）
     const startPrivateCall = async () => {
         if (!privateTargetId.trim()) {
             alert('請輸入目標設備 ID');
             return;
         }
 
-        // 清空之前累積的轉錄文字
-        finalTranscriptRef.current = '';
-        setCurrentTranscript('');
-
-        // 生成隨機通話 ID
-        const callId = `CALL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        setRandomCallId(callId);
-        setPrivateCallActive(true);
+        // 生成隨機通話 Topic ID
+        const callTopicId = `PRIVATE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        setRandomCallId(callTopicId);
 
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 16000
-                }
+            // 發送 PRIVATE_SPK_REQ 握手請求
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            // 建立握手訊息: Tag + UUID + Data
+            const tag = 'PRIVATE_SPK_REQ';
+            const data = `${privateTargetId},${callTopicId}`;  // "TargetUUID,PrivateTopicID"
+
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            const response = await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
             });
 
-            streamRef.current = stream;
-
-            // 設置音訊分析器
-            if (audioContextRef.current) {
-                const source = audioContextRef.current.createMediaStreamSource(stream);
-                analyserRef.current = audioContextRef.current.createAnalyser();
-                analyserRef.current.fftSize = 256;
-                source.connect(analyserRef.current);
+            if (response.ok) {
+                setPrivateCallActive(true);
+                console.log(`📞 Private call request sent: ${deviceId} → ${privateTargetId} (Topic: ${callTopicId})`);
+                // TODO: 等待對方接受後才開始錄音
+                // 目前先直接進入通話狀態（簡化版）
+            } else {
+                throw new Error('Failed to send call request');
             }
-
-            const mediaRecorder = new MediaRecorder(stream, {
-                mimeType: 'audio/webm;codecs=opus'
-            });
-
-            mediaRecorderRef.current = mediaRecorder;
-            audioChunksRef.current = [];
-
-            mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data);
-                }
-            };
-
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                const arrayBuffer = await audioBlob.arrayBuffer();
-
-                // 使用當前顯示的文字（包含最終和臨時結果）
-                const textToSend = currentTranscript || finalTranscriptRef.current;
-                console.log('📝 Sending private audio with transcript:', {
-                    currentTranscript,
-                    finalTranscript: finalTranscriptRef.current,
-                    willSend: textToSend || '(empty)'
-                });
-                onAudioSend(arrayBuffer, true, callId, textToSend);
-
-                // 清空轉錄文字
-                setCurrentTranscript('');
-                finalTranscriptRef.current = '';
-
-                audioChunksRef.current = [];
-                if (streamRef.current) {
-                    streamRef.current.getTracks().forEach(track => track.stop());
-                    streamRef.current = null;
-                }
-            };
-
-            mediaRecorder.start(100);
-            setIsRecording(true);
-            isRecordingRef.current = true;
-            console.log(`📞 Started private call: ${callId} → ${privateTargetId}`);
 
         } catch (error) {
             console.error('❌ Failed to start private call:', error);
-            alert('無法訪問麥克風');
+            alert('發送通話請求失敗');
             setPrivateCallActive(false);
+            setRandomCallId('');
         }
     };
 
     // 結束私人通話
-    const endPrivateCall = () => {
+    const endPrivateCall = async () => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
         }
         setIsRecording(false);
         isRecordingRef.current = false;
+
+        // 發送 PRIVATE_SPK_STOP 通知對方
+        try {
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            const tag = 'PRIVATE_SPK_STOP';
+            const data = privateTargetId;  // TargetUUID
+
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
+            });
+
+            console.log(`📞 Private call stop sent to ${privateTargetId}`);
+        } catch (error) {
+            console.error('❌ Failed to send call stop:', error);
+        }
+
         setPrivateCallActive(false);
         setRandomCallId('');
         setAudioLevel(0);
@@ -437,6 +610,52 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
                     <div className="text-sm text-gray-600">
                         當前頻道: <span className="font-medium text-gray-900">{channel}</span>
                     </div>
+
+                    {/* 頻道狀態顯示 */}
+                    {isRecording ? (
+                        // 自己正在錄音
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-2">
+                            <div className="flex items-center gap-2">
+                                <Mic className="w-4 h-4 text-red-600 animate-pulse" />
+                                <div className="text-sm">
+                                    <span className="font-medium text-red-900">您正在發話中</span>
+                                </div>
+                            </div>
+                        </div>
+                    ) : currentSpeaker && currentSpeaker !== deviceId ? (
+                        // 其他人正在發話
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2">
+                            <div className="flex items-center gap-2">
+                                <Mic className="w-4 h-4 text-yellow-600 animate-pulse" />
+                                <div className="text-sm">
+                                    <span className="font-medium text-yellow-900">{currentSpeaker}</span>
+                                    <span className="text-yellow-700"> 正在發話中</span>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        // 頻道空閒
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-2">
+                            <div className="flex items-center gap-2">
+                                <Mic className="w-4 h-4 text-green-600" />
+                                <div className="text-sm text-green-700">
+                                    頻道空閒 - 可以發話
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 請求中狀態 - 只在請求階段但還沒開始錄音時顯示 */}
+                    {requestingMic && !isRecording && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-2">
+                            <div className="flex items-center gap-2">
+                                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                                <div className="text-sm text-blue-700">
+                                    正在請求發話權限...
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* PTT 按鈕 - 改為點擊開始/結束 */}
                     <button
@@ -480,13 +699,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText }: PTTAudioPr
                         </div>
                     )}
 
-                    {/* 即時轉錄文字顯示 */}
-                    {isRecording && currentTranscript && (
-                        <div className="bg-blue-50 border border-blue-200 rounded p-2">
-                            <div className="text-xs text-gray-600 mb-1">正在識別:</div>
-                            <div className="text-sm text-blue-900 italic">{currentTranscript}</div>
-                        </div>
-                    )}
+                    {/* 群組通話不顯示即時轉錄（即時對講不需要轉譯） */}
 
                     {/* 靜音按鈕 */}
                     <button
