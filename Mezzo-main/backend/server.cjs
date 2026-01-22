@@ -1506,6 +1506,61 @@ function broadcastToClients(data) {
   }
 }
 
+// ===== WebRTC 信令輔助函數 =====
+
+/**
+ * 廣播訊息給指定頻道的所有用戶（除了發送者）
+ * @param {string} channel - PTT 頻道名稱
+ * @param {object} message - 要廣播的訊息
+ * @param {string} excludeUUID - 要排除的設備 UUID（通常是發送者）
+ */
+function broadcastToChannel(channel, message, excludeUUID) {
+  const channelUsers = pttState.channelUsers.get(channel);
+  if (!channelUsers || channelUsers.size === 0) {
+    console.warn(`⚠️ No users in channel ${channel}`);
+    return;
+  }
+
+  let successCount = 0;
+  const messageStr = JSON.stringify(message);
+
+  channelUsers.forEach(userId => {
+    if (userId !== excludeUUID) {
+      const targetWs = pttState.deviceConnections.get(userId);
+      if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+        try {
+          targetWs.send(messageStr);
+          successCount++;
+        } catch (error) {
+          console.error(`❌ Failed to send to ${userId}:`, error);
+        }
+      }
+    }
+  });
+
+  console.log(`📤 Broadcast to ${successCount} users in channel ${channel} (excluded: ${excludeUUID})`);
+}
+
+/**
+ * 發送訊息給指定設備
+ * @param {string} deviceId - 目標設備 UUID
+ * @param {object} message - 要發送的訊息
+ */
+function sendToDevice(deviceId, message) {
+  const targetWs = pttState.deviceConnections.get(deviceId);
+  if (!targetWs || targetWs.readyState !== WebSocket.OPEN) {
+    console.warn(`⚠️ Device ${deviceId} not connected or not ready`);
+    return;
+  }
+
+  try {
+    targetWs.send(JSON.stringify(message));
+    console.log(`✅ Sent message to device ${deviceId}`);
+  } catch (error) {
+    console.error(`❌ Failed to send to ${deviceId}:`, error);
+  }
+}
+
 function handleWebSocketMessage(ws, data) {
   switch (data.type) {
     case 'register_device':
@@ -1587,6 +1642,30 @@ function handleWebSocketMessage(ws, data) {
 
     case 'ping':
       ws.send(JSON.stringify({ type: 'pong' }));
+      break;
+
+    // ===== WebRTC 信令處理 =====
+    case 'webrtc_offer':
+      // 收到 WebRTC Offer，廣播給頻道內所有人（除了發送者）
+      console.log(`📤 Broadcasting WebRTC offer from ${data.from} to channel ${data.channel}`);
+      broadcastToChannel(data.channel, data, data.from);
+      break;
+
+    case 'webrtc_answer':
+      // 收到 WebRTC Answer，轉發給指定的說話者
+      console.log(`📤 Forwarding WebRTC answer from ${data.from} to ${data.to}`);
+      sendToDevice(data.to, data);
+      break;
+
+    case 'webrtc_ice_candidate':
+      // 收到 ICE Candidate，根據 to 欄位決定廣播或轉發
+      if (data.to === 'all') {
+        console.log(`📤 Broadcasting ICE candidate from ${data.from} to channel ${data.channel}`);
+        broadcastToChannel(data.channel, data, data.from);
+      } else {
+        console.log(`📤 Forwarding ICE candidate from ${data.from} to ${data.to}`);
+        sendToDevice(data.to, data);
+      }
       break;
   }
 }

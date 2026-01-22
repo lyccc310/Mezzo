@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX } from 'lucide-react';
+import { WebRTCManager } from '../utils/WebRTCManager';
 
 interface PTTAudioProps {
     deviceId: string;
@@ -30,6 +31,10 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     const [hasPermission, setHasPermission] = useState(false);  // 已獲得麥克風權限
     const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);  // 當前頻道誰在說話
 
+    // WebRTC 即時串流狀態
+    const [streamingMode, setStreamingMode] = useState(true);  // 預設使用即時串流模式
+    const [isStreaming, setIsStreaming] = useState(false);  // WebRTC 連線狀態
+
     // 私人通話狀態
     const [privateCallActive, setPrivateCallActive] = useState(false);
     const [privateTargetId, setPrivateTargetId] = useState('');
@@ -52,6 +57,10 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     const recognitionRef = useRef<any>(null);  // Web Speech API
     const isRecordingRef = useRef<boolean>(false);  // 錄音狀態的 ref
     const finalTranscriptRef = useRef<string>('');  // 累積的最終轉錄文字
+
+    // WebRTC Refs
+    const webrtcManagerRef = useRef<WebRTCManager | null>(null);
+    const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
     // 初始化音訊上下文和語音識別
     useEffect(() => {
@@ -247,6 +256,23 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                         console.log(`🛑 ${data.previousSpeaker} stopped speaking`);
                     }
                 }
+
+                // WebRTC 信令處理
+                if (data.type === 'webrtc_offer' && data.channel === channel && data.from !== deviceId) {
+                    console.log('📥 Received WebRTC offer from:', data.from);
+                    handleWebRTCOffer(data.from, data.offer);
+                }
+
+                if (data.type === 'webrtc_answer' && data.channel === channel && data.to === deviceId) {
+                    console.log('📥 Received WebRTC answer from:', data.from);
+                    handleWebRTCAnswer(data.answer);
+                }
+
+                if (data.type === 'webrtc_ice_candidate' && data.channel === channel &&
+                    (data.to === deviceId || data.to === 'all')) {
+                    console.log('📥 Received ICE candidate from:', data.from);
+                    handleWebRTCIceCandidate(data.candidate);
+                }
             } catch (error) {
                 // Ignore parse errors for non-JSON messages
             }
@@ -258,6 +284,175 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             ws.removeEventListener('message', handleMessage);
         };
     }, [ws, channel, deviceId]);
+
+    // WebRTC 即時串流：開始發話
+    const startWebRTCStreaming = async () => {
+        try {
+            console.log('🎙️ Starting WebRTC streaming...');
+
+            // 創建 WebRTC Manager
+            webrtcManagerRef.current = new WebRTCManager(
+                undefined,
+                undefined,
+                {
+                    onIceCandidate: (candidate) => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'webrtc_ice_candidate',
+                                channel: channel,
+                                from: deviceId,
+                                to: 'all',
+                                candidate: candidate.toJSON()
+                            }));
+                            console.log('📤 Sent ICE candidate');
+                        }
+                    },
+                    onConnectionStateChange: (state) => {
+                        console.log('🔗 WebRTC connection state:', state);
+                        if (state === 'connected') {
+                            setIsStreaming(true);
+                            console.log('✅ WebRTC streaming connected');
+                        } else if (state === 'failed' || state === 'disconnected') {
+                            setIsStreaming(false);
+                            console.error('❌ WebRTC connection failed');
+                        }
+                    },
+                    onError: (error) => {
+                        console.error('❌ WebRTC error:', error);
+                        stopWebRTCStreaming();
+                        alert('WebRTC 連線失敗，請稍後再試');
+                    }
+                }
+            );
+
+            // 初始化作為發送者
+            const offer = await webrtcManagerRef.current.initializeAsSender();
+
+            // 發送 Offer 給頻道所有人
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'webrtc_offer',
+                    channel: channel,
+                    from: deviceId,
+                    to: 'all',
+                    offer: offer
+                }));
+                console.log('📤 Sent WebRTC offer to channel');
+            }
+
+            setIsRecording(true);
+            isRecordingRef.current = true;
+
+        } catch (error) {
+            console.error('❌ Failed to start WebRTC streaming:', error);
+            alert('無法啟動即時串流，請檢查麥克風權限');
+            stopWebRTCStreaming();
+        }
+    };
+
+    // WebRTC 即時串流：停止發話
+    const stopWebRTCStreaming = () => {
+        console.log('🛑 Stopping WebRTC streaming...');
+
+        if (webrtcManagerRef.current) {
+            webrtcManagerRef.current.close();
+            webrtcManagerRef.current = null;
+        }
+
+        setIsRecording(false);
+        isRecordingRef.current = false;
+        setIsStreaming(false);
+        setAudioLevel(0);
+        setHasPermission(false);
+
+        console.log('✅ WebRTC streaming stopped');
+    };
+
+    // WebRTC 信令處理：收到 Offer
+    const handleWebRTCOffer = async (from: string, offer: RTCSessionDescriptionInit) => {
+        try {
+            console.log('👂 Handling WebRTC offer from:', from);
+
+            // 創建 WebRTC Manager 作為接收者
+            webrtcManagerRef.current = new WebRTCManager(
+                undefined,
+                undefined,
+                {
+                    onRemoteStream: (stream) => {
+                        console.log('🎵 Received remote audio stream');
+                        if (!remoteAudioRef.current) {
+                            remoteAudioRef.current = new Audio();
+                            remoteAudioRef.current.autoplay = true;
+                        }
+                        remoteAudioRef.current.srcObject = stream;
+                        remoteAudioRef.current.play().catch(err => {
+                            console.error('❌ Failed to play remote audio:', err);
+                        });
+                    },
+                    onIceCandidate: (candidate) => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'webrtc_ice_candidate',
+                                channel: channel,
+                                from: deviceId,
+                                to: from,
+                                candidate: candidate.toJSON()
+                            }));
+                            console.log('📤 Sent ICE candidate to speaker');
+                        }
+                    },
+                    onConnectionStateChange: (state) => {
+                        console.log('🔗 Receiver connection state:', state);
+                    },
+                    onError: (error) => {
+                        console.error('❌ Receiver WebRTC error:', error);
+                    }
+                }
+            );
+
+            // 初始化作為接收者並創建 Answer
+            const answer = await webrtcManagerRef.current.initializeAsReceiver(offer);
+
+            // 發送 Answer 給說話者
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'webrtc_answer',
+                    channel: channel,
+                    from: deviceId,
+                    to: from,
+                    answer: answer
+                }));
+                console.log('📤 Sent WebRTC answer to:', from);
+            }
+
+        } catch (error) {
+            console.error('❌ Failed to handle WebRTC offer:', error);
+        }
+    };
+
+    // WebRTC 信令處理：收到 Answer
+    const handleWebRTCAnswer = async (answer: RTCSessionDescriptionInit) => {
+        try {
+            if (webrtcManagerRef.current) {
+                await webrtcManagerRef.current.handleAnswer(answer);
+                console.log('✅ WebRTC answer processed');
+            }
+        } catch (error) {
+            console.error('❌ Failed to handle WebRTC answer:', error);
+        }
+    };
+
+    // WebRTC 信令處理：收到 ICE Candidate
+    const handleWebRTCIceCandidate = async (candidate: RTCIceCandidateInit) => {
+        try {
+            if (webrtcManagerRef.current) {
+                await webrtcManagerRef.current.addIceCandidate(candidate);
+                console.log('✅ ICE candidate added');
+            }
+        } catch (error) {
+            console.error('❌ Failed to add ICE candidate:', error);
+        }
+    };
 
     // 請求發言權限（群組通話的搶麥機制）
     const startGroupRecording = async () => {
@@ -353,65 +548,17 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     // 實際開始錄音（內部函數，權限獲得後調用）
     const actuallyStartRecording = async () => {
         try {
-            // 清空之前累積的轉錄文字
-            finalTranscriptRef.current = '';
-            setCurrentTranscript('');
+            console.log('🎙️ Permission granted, starting recording...');
+            console.log('📻 Mode:', streamingMode ? 'WebRTC Streaming' : 'Recording');
 
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 16000  // 16kHz 適合語音
-                }
-            });
-
-            streamRef.current = stream;
-
-            // 設置音訊分析器
-            if (audioContextRef.current) {
-                const source = audioContextRef.current.createMediaStreamSource(stream);
-                analyserRef.current = audioContextRef.current.createAnalyser();
-                analyserRef.current.fftSize = 256;
-                source.connect(analyserRef.current);
+            // 根據模式選擇 WebRTC 或錄音
+            if (streamingMode) {
+                // 使用 WebRTC 即時串流
+                await startWebRTCStreaming();
+            } else {
+                // 使用傳統錄音模式
+                await startRecordingMode();
             }
-
-            // 創建 MediaRecorder
-            const mediaRecorder = new MediaRecorder(stream, {
-                mimeType: 'audio/webm;codecs=opus'
-            });
-
-            mediaRecorderRef.current = mediaRecorder;
-            audioChunksRef.current = [];
-
-            mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data);
-                }
-            };
-
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                const arrayBuffer = await audioBlob.arrayBuffer();
-
-                // 群組通話：不發送轉譯文字，只發送音訊
-                console.log('📝 Sending group PTT audio (no transcript)');
-                onAudioSend(arrayBuffer, false, undefined, undefined);
-
-                // 清理
-                audioChunksRef.current = [];
-                if (streamRef.current) {
-                    streamRef.current.getTracks().forEach(track => track.stop());
-                    streamRef.current = null;
-                }
-            };
-
-            mediaRecorder.start(100);  // 每 100ms 收集一次數據
-            setIsRecording(true);
-            isRecordingRef.current = true;
-
-            // 群組通話不啟動語音識別（即時對講，不需要轉譯）
-            console.log('🎙️ Started group PTT recording (no speech recognition)');
 
         } catch (error) {
             console.error('❌ Failed to start recording:', error);
@@ -419,61 +566,133 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         }
     };
 
+    // 傳統錄音模式（用於語音訊息）
+    const startRecordingMode = async () => {
+        // 清空之前累積的轉錄文字
+        finalTranscriptRef.current = '';
+        setCurrentTranscript('');
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: 16000  // 16kHz 適合語音
+            }
+        });
+
+        streamRef.current = stream;
+
+        // 設置音訊分析器
+        if (audioContextRef.current) {
+            const source = audioContextRef.current.createMediaStreamSource(stream);
+            analyserRef.current = audioContextRef.current.createAnalyser();
+            analyserRef.current.fftSize = 256;
+            source.connect(analyserRef.current);
+        }
+
+        // 創建 MediaRecorder
+        const mediaRecorder = new MediaRecorder(stream, {
+            mimeType: 'audio/webm;codecs=opus'
+        });
+
+        mediaRecorderRef.current = mediaRecorder;
+        audioChunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                audioChunksRef.current.push(event.data);
+            }
+        };
+
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+            const arrayBuffer = await audioBlob.arrayBuffer();
+
+            // 群組通話：不發送轉譯文字，只發送音訊
+            console.log('📝 Sending group PTT audio (no transcript)');
+            onAudioSend(arrayBuffer, false, undefined, undefined);
+
+            // 清理
+            audioChunksRef.current = [];
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+                streamRef.current = null;
+            }
+        };
+
+        mediaRecorder.start(100);  // 每 100ms 收集一次數據
+        setIsRecording(true);
+        isRecordingRef.current = true;
+
+        // 群組通話不啟動語音識別（即時對講，不需要轉譯）
+        console.log('🎙️ Started group PTT recording (no speech recognition)');
+    };
+
     // 停止群組錄音
     const stopGroupRecording = async () => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop();
-            setIsRecording(false);
-            isRecordingRef.current = false;
-            setAudioLevel(0);
-            setHasPermission(false);  // 釋放麥克風權限
+        console.log('🛑 Stopping group recording/streaming...');
+        console.log('📻 Mode:', streamingMode ? 'WebRTC Streaming' : 'Recording');
 
-            // 群組通話不使用語音識別，不需要停止
+        // 根據模式選擇停止方式
+        if (streamingMode) {
+            // 停止 WebRTC 串流
+            stopWebRTCStreaming();
+        } else {
+            // 停止傳統錄音
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.stop();
+                setIsRecording(false);
+                isRecordingRef.current = false;
+                setAudioLevel(0);
 
-            // 清除靜音計時器
-            if (silenceTimerRef.current) {
-                clearTimeout(silenceTimerRef.current);
-                silenceTimerRef.current = null;
+                // 清除靜音計時器
+                if (silenceTimerRef.current) {
+                    clearTimeout(silenceTimerRef.current);
+                    silenceTimerRef.current = null;
+                }
             }
-
-            // 發送 PTT_MSG_TYPE_SPEECH_STOP 通知後端釋放麥克風
-            try {
-                const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
-
-                const tag = 'PTT_MSG_TYPE_SPEECH_STOP';
-                const data = '';
-
-                const tagBuffer = new Uint8Array(32);
-                const tagBytes = new TextEncoder().encode(tag);
-                tagBuffer.set(tagBytes.slice(0, 32));
-
-                const uuidBuffer = new Uint8Array(128);
-                const uuidBytes = new TextEncoder().encode(deviceId);
-                uuidBuffer.set(uuidBytes.slice(0, 128));
-
-                const dataBytes = new TextEncoder().encode(data);
-                const combined = new Uint8Array(160 + dataBytes.length);
-                combined.set(tagBuffer, 0);
-                combined.set(uuidBuffer, 32);
-                combined.set(dataBytes, 160);
-
-                await fetch(`${API_BASE}/ptt/publish`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
-                        message: Array.from(combined),
-                        encoding: 'binary'
-                    })
-                });
-
-                console.log('🛑 PTT_MSG_TYPE_SPEECH_STOP sent');
-            } catch (error) {
-                console.error('❌ Failed to send SPEECH_STOP:', error);
-            }
-
-            console.log('🎙️ Stopped group recording');
         }
+
+        setHasPermission(false);  // 釋放麥克風權限
+
+        // 發送 PTT_MSG_TYPE_SPEECH_STOP 通知後端釋放麥克風
+        try {
+            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+
+            const tag = 'PTT_MSG_TYPE_SPEECH_STOP';
+            const data = '';
+
+            const tagBuffer = new Uint8Array(32);
+            const tagBytes = new TextEncoder().encode(tag);
+            tagBuffer.set(tagBytes.slice(0, 32));
+
+            const uuidBuffer = new Uint8Array(128);
+            const uuidBytes = new TextEncoder().encode(deviceId);
+            uuidBuffer.set(uuidBytes.slice(0, 128));
+
+            const dataBytes = new TextEncoder().encode(data);
+            const combined = new Uint8Array(160 + dataBytes.length);
+            combined.set(tagBuffer, 0);
+            combined.set(uuidBuffer, 32);
+            combined.set(dataBytes, 160);
+
+            await fetch(`${API_BASE}/ptt/publish`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`,
+                    message: Array.from(combined),
+                    encoding: 'binary'
+                })
+            });
+
+            console.log('🛑 PTT_MSG_TYPE_SPEECH_STOP sent');
+        } catch (error) {
+            console.error('❌ Failed to send SPEECH_STOP:', error);
+        }
+
+        console.log('✅ Stopped group recording/streaming');
     };
 
     // 發送私人通話請求（握手）
@@ -653,6 +872,33 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                                 <div className="text-sm text-blue-700">
                                     正在請求發話權限...
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 模式切換 */}
+                    <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg p-2">
+                        <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                checked={streamingMode}
+                                onChange={(e) => setStreamingMode(e.target.checked)}
+                                disabled={isRecording}
+                                className="w-4 h-4"
+                            />
+                            即時串流模式
+                        </label>
+                        <span className="text-xs text-gray-500">
+                            {streamingMode ? '低延遲 < 100ms' : '錄音模式'}
+                        </span>
+                    </div>
+
+                    {/* WebRTC 連線狀態 */}
+                    {streamingMode && isStreaming && (
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-2">
+                            <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
+                                <span className="text-xs text-green-700 font-medium">WebRTC 連線中</span>
                             </div>
                         </div>
                     )}
@@ -869,11 +1115,12 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-gray-700">
                 <div className="font-semibold mb-1">使用說明</div>
                 <ul className="space-y-1 list-disc list-inside">
-                    <li>群組語音：點擊「開始發話」開始錄音，點擊「停止發話」結束並發送</li>
+                    <li><strong>即時串流模式</strong>：使用 WebRTC 即時傳輸音訊，延遲 &lt; 100ms（預設）</li>
+                    <li><strong>錄音模式</strong>：錄完後發送，適合語音訊息（可關閉即時串流）</li>
+                    <li>群組語音：點擊「開始發話」開始錄音/串流，點擊「停止發話」結束</li>
                     <li>私人通話：輸入目標 ID，點擊發起通話</li>
                     <li>通話中無法使用群組 PTT</li>
-                    <li>自動斷句：可開啟後系統會根據靜音偵測自動分段發送（預設關閉）</li>
-                    <li>語音轉文字：支援繁體中文即時轉換（需瀏覽器支援）</li>
+                    <li>自動斷句：可開啟後系統會根據靜音偵測自動分段發送（僅錄音模式）</li>
                 </ul>
             </div>
         </div>
