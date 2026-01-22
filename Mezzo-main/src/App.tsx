@@ -390,7 +390,7 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript }: { teamStatus: Team
             <div className="bg-indigo-900 aspect-video flex items-center justify-center relative">
               <img
                 ref={imgRef}
-                src="http://220.135.209.219:8088/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1"
+                src="http://118.163.141.80:80/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=0"
                 alt="Live Feed"
                 className="w-full h-full object-cover"
                 crossOrigin="anonymous"
