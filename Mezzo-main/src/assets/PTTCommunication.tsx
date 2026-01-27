@@ -64,14 +64,14 @@ const PTTCommunication = () => {
 
     // 記錄日誌
     const addLog = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') => {
-        const emoji = {
-            info: 'ℹ️',
-            success: '✅',
-            error: '❌',
-            warning: '⚠️'
+        const prefix = {
+            info: '[INFO]',
+            success: '[OK]',
+            error: '[ERR]',
+            warning: '[WARN]'
         };
         const time = new Date().toLocaleTimeString();
-        setLogs(prev => [...prev, `${emoji[type]} [${time}] ${message}`]);
+        setLogs(prev => [...prev, `${prefix[type]} [${time}] ${message}`]);
     };
 
     // 發送 PTT 訊息到後端
@@ -212,27 +212,27 @@ const PTTCommunication = () => {
     const clearMessages = () => setMessages([]);
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-indigo-900 to-blue-800 p-6">
-            <div className="max-w-7xl mx-auto bg-white rounded-lg shadow-2xl overflow-hidden">
+        <div className="min-h-screen bg-slate-900 p-6">
+            <div className="max-w-7xl mx-auto bg-slate-800/50 rounded-lg border border-slate-700/50 overflow-hidden">
                 {/* Header */}
-                <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-8 py-6">
-                    <h1 className="text-3xl font-bold flex items-center gap-3">
-                        <Radio className="w-8 h-8" />
+                <div className="bg-slate-800 border-b border-slate-700/50 text-white px-8 py-6">
+                    <h1 className="text-3xl font-bold flex items-center gap-3 text-slate-100">
+                        <Radio className="w-8 h-8 text-purple-400" />
                         PTT 通訊系統測試工具
                     </h1>
-                    <p className="mt-2 opacity-90">測試 /WJI/PTT/* MQTT 通訊協議</p>
+                    <p className="mt-2 text-slate-400">測試 /WJI/PTT/* MQTT 通訊協議</p>
                 </div>
 
                 {/* Main Content */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
                     {/* 左側：控制面板 */}
                     <div className="space-y-6">
-                        <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
-                            <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                        <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50">
+                            <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-slate-100">
                                 {wsConnected ? (
-                                    <Wifi className="w-5 h-5 text-green-500 animate-pulse" />
+                                    <Wifi className="w-5 h-5 text-emerald-400 animate-pulse" />
                                 ) : (
-                                    <WifiOff className="w-5 h-5 text-red-500" />
+                                    <WifiOff className="w-5 h-5 text-red-400" />
                                 )}
                                 控制面板
                             </h2>
@@ -240,37 +240,37 @@ const PTTCommunication = () => {
                             {/* 基本設定 */}
                             <div className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    <label className="block text-sm font-medium text-slate-300 mb-1">
                                         伺服器位址
                                     </label>
                                     <input
                                         type="text"
                                         value={serverUrl}
                                         onChange={(e) => setServerUrl(e.target.value)}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500"
                                     />
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    <label className="block text-sm font-medium text-slate-300 mb-1">
                                         PTT 設備 ID (UUID)
                                     </label>
                                     <input
                                         type="text"
                                         value={deviceId}
                                         onChange={(e) => setDeviceId(e.target.value)}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500"
                                     />
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    <label className="block text-sm font-medium text-slate-300 mb-1">
                                         PTT 頻道 (Channel)
                                     </label>
                                     <select
                                         value={channel}
                                         onChange={(e) => setChannel(e.target.value)}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500"
                                     >
                                         <option value="channel1">頻道 1</option>
                                         <option value="channel2">頻道 2</option>
@@ -284,26 +284,26 @@ const PTTCommunication = () => {
                                     <button
                                         onClick={connectWebSocket}
                                         disabled={wsConnected}
-                                        className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                        className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
                                     >
-                                        🔌 連接 WebSocket
+                                        連接 WebSocket
                                     </button>
                                     <button
                                         onClick={disconnectWebSocket}
                                         disabled={!wsConnected}
-                                        className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                        className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
                                     >
-                                        ⛔ 斷開連接
+                                        斷開連接
                                     </button>
                                 </div>
                             </div>
 
-                            <hr className="my-6 border-gray-300" />
+                            <hr className="my-6 border-slate-700" />
 
                             {/* 發送文字訊息 */}
                             <div className="space-y-3">
-                                <h3 className="font-semibold flex items-center gap-2">
-                                    <Send className="w-4 h-4" />
+                                <h3 className="font-semibold flex items-center gap-2 text-slate-200">
+                                    <Send className="w-4 h-4 text-emerald-400" />
                                     發送文字訊息
                                 </h3>
                                 <textarea
@@ -316,42 +316,42 @@ const PTTCommunication = () => {
                                         }
                                     }}
                                     placeholder="輸入要發送的訊息..."
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded-lg focus:ring-2 focus:ring-purple-500"
                                     rows={3}
                                 />
                                 <button
                                     onClick={sendTextMessage}
-                                    className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                                    className="w-full px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
                                 >
-                                    💬 發送文字訊息
+                                    發送文字訊息
                                 </button>
                             </div>
 
-                            <hr className="my-6 border-gray-300" />
+                            <hr className="my-6 border-slate-700" />
 
                             {/* 發送 GPS */}
                             <div className="space-y-3">
-                                <h3 className="font-semibold flex items-center gap-2">
-                                    <MapPin className="w-4 h-4" />
+                                <h3 className="font-semibold flex items-center gap-2 text-slate-200">
+                                    <MapPin className="w-4 h-4 text-blue-400" />
                                     發送 GPS
                                 </h3>
                                 <div className="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label className="block text-xs text-gray-600 mb-1">緯度</label>
+                                        <label className="block text-xs text-slate-400 mb-1">緯度</label>
                                         <input
                                             type="text"
                                             value={gpsLat}
                                             onChange={(e) => setGpsLat(e.target.value)}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                                         />
                                     </div>
                                     <div>
-                                        <label className="block text-xs text-gray-600 mb-1">經度</label>
+                                        <label className="block text-xs text-slate-400 mb-1">經度</label>
                                         <input
                                             type="text"
                                             value={gpsLon}
                                             onChange={(e) => setGpsLon(e.target.value)}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
                                         />
                                     </div>
                                 </div>
@@ -359,35 +359,35 @@ const PTTCommunication = () => {
                                     onClick={sendGPS}
                                     className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                                 >
-                                    📍 發送 GPS
+                                    發送 GPS
                                 </button>
                             </div>
 
-                            <hr className="my-6 border-gray-300" />
+                            <hr className="my-6 border-slate-700" />
 
                             {/* 緊急功能 */}
                             <div className="space-y-3">
-                                <h3 className="font-semibold flex items-center gap-2 text-red-600">
+                                <h3 className="font-semibold flex items-center gap-2 text-red-400">
                                     <AlertTriangle className="w-4 h-4" />
                                     緊急功能
                                 </h3>
                                 <div className="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label className="block text-xs text-gray-600 mb-1">SOS 緯度</label>
+                                        <label className="block text-xs text-slate-400 mb-1">SOS 緯度</label>
                                         <input
                                             type="text"
                                             value={sosLat}
                                             onChange={(e) => setSosLat(e.target.value)}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                                            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-red-500"
                                         />
                                     </div>
                                     <div>
-                                        <label className="block text-xs text-gray-600 mb-1">SOS 經度</label>
+                                        <label className="block text-xs text-slate-400 mb-1">SOS 經度</label>
                                         <input
                                             type="text"
                                             value={sosLon}
                                             onChange={(e) => setSosLon(e.target.value)}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                                            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-red-500"
                                         />
                                     </div>
                                 </div>
@@ -395,30 +395,30 @@ const PTTCommunication = () => {
                                     onClick={sendSOS}
                                     className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
                                 >
-                                    🆘 發送 SOS
+                                    發送 SOS
                                 </button>
                             </div>
 
-                            <hr className="my-6 border-gray-300" />
+                            <hr className="my-6 border-slate-700" />
 
                             {/* 廣播訊息 */}
                             <div className="space-y-3">
-                                <h3 className="font-semibold flex items-center gap-2">
-                                    <Volume2 className="w-4 h-4" />
+                                <h3 className="font-semibold flex items-center gap-2 text-slate-200">
+                                    <Volume2 className="w-4 h-4 text-amber-400" />
                                     廣播訊息
                                 </h3>
                                 <textarea
                                     value={broadcastText}
                                     onChange={(e) => setBroadcastText(e.target.value)}
                                     placeholder="輸入廣播訊息..."
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded-lg focus:ring-2 focus:ring-amber-500"
                                     rows={3}
                                 />
                                 <button
                                     onClick={sendBroadcast}
-                                    className="w-full px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
+                                    className="w-full px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
                                 >
-                                    📢 發送廣播
+                                    發送廣播
                                 </button>
                             </div>
                         </div>
@@ -428,34 +428,34 @@ const PTTCommunication = () => {
                     <div className="space-y-6">
                         {/* 統計資訊 */}
                         <div className="grid grid-cols-3 gap-4">
-                            <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
-                                <div className="text-3xl font-bold text-green-600">{stats.sent}</div>
-                                <div className="text-sm text-gray-600">已發送</div>
+                            <div className="bg-emerald-950/50 border border-emerald-800/50 rounded-lg p-4 text-center">
+                                <div className="text-3xl font-bold text-emerald-400">{stats.sent}</div>
+                                <div className="text-sm text-slate-400">已發送</div>
                             </div>
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
-                                <div className="text-3xl font-bold text-blue-600">{stats.received}</div>
-                                <div className="text-sm text-gray-600">已接收</div>
+                            <div className="bg-blue-950/50 border border-blue-800/50 rounded-lg p-4 text-center">
+                                <div className="text-3xl font-bold text-blue-400">{stats.received}</div>
+                                <div className="text-sm text-slate-400">已接收</div>
                             </div>
-                            <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">
-                                <div className="text-3xl font-bold text-red-600">{stats.errors}</div>
-                                <div className="text-sm text-gray-600">錯誤數</div>
+                            <div className="bg-red-950/50 border border-red-800/50 rounded-lg p-4 text-center">
+                                <div className="text-3xl font-bold text-red-400">{stats.errors}</div>
+                                <div className="text-sm text-slate-400">錯誤數</div>
                             </div>
                         </div>
 
                         {/* 即時訊息 */}
-                        <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
+                        <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50">
                             <div className="flex items-center justify-between mb-4">
-                                <h2 className="text-xl font-bold">📨 即時訊息</h2>
+                                <h2 className="text-xl font-bold text-slate-100">即時訊息</h2>
                                 <button
                                     onClick={clearMessages}
-                                    className="text-sm text-gray-600 hover:text-gray-900"
+                                    className="text-sm text-slate-400 hover:text-slate-200"
                                 >
                                     清空
                                 </button>
                             </div>
-                            <div className="h-64 overflow-y-auto bg-white rounded-lg p-4 space-y-2">
+                            <div className="h-64 overflow-y-auto bg-slate-900/50 rounded-lg p-4 space-y-2 border border-slate-700/50">
                                 {messages.length === 0 ? (
-                                    <p className="text-center text-gray-400">尚無訊息</p>
+                                    <p className="text-center text-slate-500">尚無訊息</p>
                                 ) : (
                                     messages.map((msg, idx) => (
                                         <div
@@ -465,8 +465,8 @@ const PTTCommunication = () => {
                                             <div
                                                 className={`max-w-xs px-4 py-2 rounded-lg ${
                                                     msg.isSent
-                                                        ? 'bg-indigo-600 text-white'
-                                                        : 'bg-gray-200 text-gray-900'
+                                                        ? 'bg-purple-600 text-white'
+                                                        : 'bg-slate-700/50 text-slate-200 border border-slate-600/50'
                                                 }`}
                                             >
                                                 <div className="text-sm">{msg.text}</div>
@@ -482,19 +482,19 @@ const PTTCommunication = () => {
                         </div>
 
                         {/* 系統日誌 */}
-                        <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
+                        <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50">
                             <div className="flex items-center justify-between mb-4">
-                                <h2 className="text-xl font-bold">📋 系統日誌</h2>
+                                <h2 className="text-xl font-bold text-slate-100">系統日誌</h2>
                                 <button
                                     onClick={clearLogs}
-                                    className="text-sm text-gray-600 hover:text-gray-900"
+                                    className="text-sm text-slate-400 hover:text-slate-200"
                                 >
                                     清空
                                 </button>
                             </div>
-                            <div className="h-64 overflow-y-auto bg-black rounded-lg p-4 font-mono text-xs text-green-400">
+                            <div className="h-64 overflow-y-auto bg-slate-950 rounded-lg p-4 font-mono text-xs text-emerald-400 border border-slate-700/50">
                                 {logs.length === 0 ? (
-                                    <p className="text-gray-500">等待日誌...</p>
+                                    <p className="text-slate-600">等待日誌...</p>
                                 ) : (
                                     logs.map((log, idx) => (
                                         <div key={idx} className="mb-1">

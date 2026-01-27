@@ -1,13 +1,30 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX } from 'lucide-react';
+import {
+    Mic,
+    MicOff,
+    Phone,
+    PhoneOff,
+    Volume2,
+    VolumeX,
+    Radio,
+    Wifi,
+    Settings,
+    Clock,
+    Zap,
+    Activity,
+    Info,
+    CheckCircle,
+    XCircle,
+    Loader2
+} from 'lucide-react';
 import { WebRTCManager } from '../utils/WebRTCManager';
 
 interface PTTAudioProps {
     deviceId: string;
     channel: string;
     onAudioSend: (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string, transcript?: string) => void;
-    onSpeechToText?: (text: string) => void;  // 語音轉文字回調（即時顯示用）
-    ws?: WebSocket | null;  // WebSocket 連線（用於接收 PTT 權限訊息）
+    onSpeechToText?: (text: string) => void;
+    ws?: WebSocket | null;
 }
 
 interface AudioPacket {
@@ -15,7 +32,7 @@ interface AudioPacket {
     type: 'speech' | 'private';
     channel: string;
     from: string;
-    audioData: string;  // base64
+    audioData: string;
     timestamp: string;
     randomId?: string;
 }
@@ -27,13 +44,13 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     const [audioLevel, setAudioLevel] = useState(0);
 
     // PTT 搶麥狀態
-    const [requestingMic, setRequestingMic] = useState(false);  // 正在請求麥克風
-    const [hasPermission, setHasPermission] = useState(false);  // 已獲得麥克風權限
-    const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);  // 當前頻道誰在說話
+    const [requestingMic, setRequestingMic] = useState(false);
+    const [hasPermission, setHasPermission] = useState(false);
+    const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);
 
     // WebRTC 即時串流狀態
-    const [streamingMode, setStreamingMode] = useState(true);  // 預設使用即時串流模式
-    const [isStreaming, setIsStreaming] = useState(false);  // WebRTC 連線狀態
+    const [streamingMode, setStreamingMode] = useState(true);
+    const [isStreaming, setIsStreaming] = useState(false);
 
     // 私人通話狀態
     const [privateCallActive, setPrivateCallActive] = useState(false);
@@ -41,11 +58,11 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     const [randomCallId, setRandomCallId] = useState('');
 
     // 語音轉文字狀態
-    const [autoSend, setAutoSend] = useState(false);  // 自動發送開關（預設關閉）
-    const [silenceThreshold, setSilenceThreshold] = useState(0.02);  // 靜音閾值
-    const [silenceDuration, setSilenceDuration] = useState(1500);  // 靜音持續時間 (ms)
-    const [speechRecognitionEnabled, setSpeechRecognitionEnabled] = useState(false);  // STT 可用性
-    const [currentTranscript, setCurrentTranscript] = useState('');  // 當前識別的文字
+    const [autoSend, setAutoSend] = useState(false);
+    const [silenceThreshold, setSilenceThreshold] = useState(0.02);
+    const [silenceDuration, setSilenceDuration] = useState(1500);
+    const [speechRecognitionEnabled, setSpeechRecognitionEnabled] = useState(false);
+    const [currentTranscript, setCurrentTranscript] = useState('');
 
     // Refs
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -54,9 +71,9 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     const audioChunksRef = useRef<Blob[]>([]);
     const streamRef = useRef<MediaStream | null>(null);
     const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const recognitionRef = useRef<any>(null);  // Web Speech API
-    const isRecordingRef = useRef<boolean>(false);  // 錄音狀態的 ref
-    const finalTranscriptRef = useRef<string>('');  // 累積的最終轉錄文字
+    const recognitionRef = useRef<any>(null);
+    const isRecordingRef = useRef<boolean>(false);
+    const finalTranscriptRef = useRef<string>('');
 
     // WebRTC Refs
     const webrtcManagerRef = useRef<WebRTCManager | null>(null);
@@ -66,82 +83,61 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     useEffect(() => {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-        // 初始化 Web Speech API (如果瀏覽器支援)
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
             recognitionRef.current = new SpeechRecognition();
             recognitionRef.current.continuous = true;
             recognitionRef.current.interimResults = true;
-            recognitionRef.current.lang = 'zh-TW';  // 繁體中文
+            recognitionRef.current.lang = 'zh-TW';
 
             recognitionRef.current.onstart = () => {
-                console.log('✅ Speech recognition started successfully');
+                console.log('Speech recognition started');
                 setSpeechRecognitionEnabled(true);
             };
 
             recognitionRef.current.onend = () => {
-                console.log('⏹️ Speech recognition ended');
+                console.log('Speech recognition ended');
                 setSpeechRecognitionEnabled(false);
 
-                // 如果正在錄音，自動重新啟動語音識別
-                // 這樣可以保持持續識別
                 if (isRecordingRef.current) {
                     setTimeout(() => {
                         try {
                             if (recognitionRef.current && isRecordingRef.current) {
                                 recognitionRef.current.start();
-                                console.log('🔄 Speech recognition auto-restarted');
                             }
                         } catch (err) {
-                            console.warn('⚠️ Auto-restart failed:', err);
+                            console.warn('Auto-restart failed:', err);
                         }
                     }, 100);
                 }
             };
 
             recognitionRef.current.onresult = (event: any) => {
-                // 收集當前這次的結果
                 let interimTranscript = '';
 
                 for (let i = event.resultIndex; i < event.results.length; i++) {
                     const transcript = event.results[i][0].transcript;
                     if (event.results[i].isFinal) {
-                        // 累積最終結果
                         finalTranscriptRef.current += transcript;
-                        console.log('✅ Final result added:', transcript);
                     } else {
-                        // 臨時結果
                         interimTranscript += transcript;
                     }
                 }
 
-                // 顯示的文字 = 已確認的文字 + 臨時文字
                 const displayText = finalTranscriptRef.current + interimTranscript;
-                console.log('🎤 Speech recognized:', {
-                    finalAccumulated: finalTranscriptRef.current || '(none)',
-                    interim: interimTranscript || '(none)',
-                    display: displayText
-                });
-
-                // 即時更新顯示
                 setCurrentTranscript(displayText);
 
-                // 通知父組件（僅用於即時顯示，不影響發送）
                 if (onSpeechToText && displayText) {
                     onSpeechToText(displayText);
                 }
             };
 
             recognitionRef.current.onerror = (event: any) => {
-                console.error('❌ Speech recognition error:', event.error);
+                console.error('Speech recognition error:', event.error);
                 if (event.error === 'not-allowed') {
                     alert('請允許麥克風權限以使用語音轉文字功能');
                 }
             };
-
-            console.log('✅ Speech Recognition API initialized');
-        } else {
-            console.warn('⚠️ Web Speech API not supported in this browser');
         }
 
         return () => {
@@ -167,18 +163,14 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             const level = average / 255;
             setAudioLevel(level);
 
-            // 靜音偵測 (自動斷句)
             if (autoSend && !privateCallActive) {
                 if (level < silenceThreshold) {
-                    // 偵測到靜音，開始計時
                     if (!silenceTimerRef.current) {
                         silenceTimerRef.current = setTimeout(() => {
-                            console.log('🔇 Silence detected, auto-sending audio chunk...');
-                            stopGroupRecording();  // 自動停止並發送
+                            stopGroupRecording();
                         }, silenceDuration);
                     }
                 } else {
-                    // 有聲音，清除計時器
                     if (silenceTimerRef.current) {
                         clearTimeout(silenceTimerRef.current);
                         silenceTimerRef.current = null;
@@ -209,88 +201,59 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             try {
                 const data = JSON.parse(event.data);
 
-                // 收到允許發言
                 if (data.type === 'ptt_speech_allow' && data.channel === channel) {
-                    console.log('✅ PTT permission granted');
                     setRequestingMic(false);
                     setHasPermission(true);
-                    // 立即開始錄音
                     actuallyStartRecording();
                 }
 
-                // 收到拒絕發言
                 if (data.type === 'ptt_speech_deny' && data.channel === channel) {
-                    console.log('🚫 PTT permission denied:', data.reason);
                     setRequestingMic(false);
                     setHasPermission(false);
                     alert(`無法取得麥克風：${data.reason || '已有人在使用'}`);
                 }
 
-                // 收到請求已發送通知
-                if (data.type === 'ptt_mic_request_sent' && data.channel === channel) {
-                    console.log(`⏳ Mic request sent to ${data.currentSpeaker}, waiting for response...`);
-                    // 保持 requestingMic 狀態，顯示等待中
-                }
-
-                // 收到搶麥請求（有人想要搶我的麥克風）
                 if (data.type === 'ptt_mic_request' && data.channel === channel && data.currentSpeaker === deviceId) {
-                    console.log(`🔔 Mic request from ${data.requester}`);
                     const accept = window.confirm(`${data.requester} 想要發言，是否讓出麥克風？`);
-
-                    // 發送回應
                     sendMicResponse(data.requester, accept);
-
                     if (accept) {
-                        // 停止自己的錄音
                         stopGroupRecording();
                     }
                 }
 
-                // 收到說話者更新（誰在說話）
                 if (data.type === 'ptt_speaker_update' && data.channel === channel) {
                     if (data.action === 'start') {
                         setCurrentSpeaker(data.speaker);
-                        console.log(`🎙️ ${data.speaker} is now speaking`);
                     } else if (data.action === 'stop') {
                         setCurrentSpeaker(null);
-                        console.log(`🛑 ${data.previousSpeaker} stopped speaking`);
                     }
                 }
 
                 // WebRTC 信令處理
                 if (data.type === 'webrtc_offer' && data.channel === channel && data.from !== deviceId) {
-                    console.log('📥 Received WebRTC offer from:', data.from);
                     handleWebRTCOffer(data.from, data.offer);
                 }
 
                 if (data.type === 'webrtc_answer' && data.channel === channel && data.to === deviceId) {
-                    console.log('📥 Received WebRTC answer from:', data.from);
                     handleWebRTCAnswer(data.answer);
                 }
 
                 if (data.type === 'webrtc_ice_candidate' && data.channel === channel &&
                     (data.to === deviceId || data.to === 'all')) {
-                    console.log('📥 Received ICE candidate from:', data.from);
                     handleWebRTCIceCandidate(data.candidate);
                 }
             } catch (error) {
-                // Ignore parse errors for non-JSON messages
+                // Ignore parse errors
             }
         };
 
         ws.addEventListener('message', handleMessage);
-
-        return () => {
-            ws.removeEventListener('message', handleMessage);
-        };
+        return () => ws.removeEventListener('message', handleMessage);
     }, [ws, channel, deviceId]);
 
     // WebRTC 即時串流：開始發話
     const startWebRTCStreaming = async () => {
         try {
-            console.log('🎙️ Starting WebRTC streaming...');
-
-            // 創建 WebRTC Manager
             webrtcManagerRef.current = new WebRTCManager(
                 undefined,
                 undefined,
@@ -304,31 +267,25 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                                 to: 'all',
                                 candidate: candidate.toJSON()
                             }));
-                            console.log('📤 Sent ICE candidate');
                         }
                     },
                     onConnectionStateChange: (state) => {
-                        console.log('🔗 WebRTC connection state:', state);
                         if (state === 'connected') {
                             setIsStreaming(true);
-                            console.log('✅ WebRTC streaming connected');
                         } else if (state === 'failed' || state === 'disconnected') {
                             setIsStreaming(false);
-                            console.error('❌ WebRTC connection failed');
                         }
                     },
                     onError: (error) => {
-                        console.error('❌ WebRTC error:', error);
+                        console.error('WebRTC error:', error);
                         stopWebRTCStreaming();
                         alert('WebRTC 連線失敗，請稍後再試');
                     }
                 }
             );
 
-            // 初始化作為發送者
             const offer = await webrtcManagerRef.current.initializeAsSender();
 
-            // 發送 Offer 給頻道所有人
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'webrtc_offer',
@@ -337,23 +294,19 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                     to: 'all',
                     offer: offer
                 }));
-                console.log('📤 Sent WebRTC offer to channel');
             }
 
             setIsRecording(true);
             isRecordingRef.current = true;
 
         } catch (error) {
-            console.error('❌ Failed to start WebRTC streaming:', error);
+            console.error('Failed to start WebRTC streaming:', error);
             alert('無法啟動即時串流，請檢查麥克風權限');
             stopWebRTCStreaming();
         }
     };
 
-    // WebRTC 即時串流：停止發話
     const stopWebRTCStreaming = () => {
-        console.log('🛑 Stopping WebRTC streaming...');
-
         if (webrtcManagerRef.current) {
             webrtcManagerRef.current.close();
             webrtcManagerRef.current = null;
@@ -364,29 +317,22 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         setIsStreaming(false);
         setAudioLevel(0);
         setHasPermission(false);
-
-        console.log('✅ WebRTC streaming stopped');
     };
 
-    // WebRTC 信令處理：收到 Offer
     const handleWebRTCOffer = async (from: string, offer: RTCSessionDescriptionInit) => {
         try {
-            console.log('👂 Handling WebRTC offer from:', from);
-
-            // 創建 WebRTC Manager 作為接收者
             webrtcManagerRef.current = new WebRTCManager(
                 undefined,
                 undefined,
                 {
                     onRemoteStream: (stream) => {
-                        console.log('🎵 Received remote audio stream');
                         if (!remoteAudioRef.current) {
                             remoteAudioRef.current = new Audio();
                             remoteAudioRef.current.autoplay = true;
                         }
                         remoteAudioRef.current.srcObject = stream;
                         remoteAudioRef.current.play().catch(err => {
-                            console.error('❌ Failed to play remote audio:', err);
+                            console.error('Failed to play remote audio:', err);
                         });
                     },
                     onIceCandidate: (candidate) => {
@@ -398,22 +344,19 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                                 to: from,
                                 candidate: candidate.toJSON()
                             }));
-                            console.log('📤 Sent ICE candidate to speaker');
                         }
                     },
                     onConnectionStateChange: (state) => {
-                        console.log('🔗 Receiver connection state:', state);
+                        console.log('Receiver connection state:', state);
                     },
                     onError: (error) => {
-                        console.error('❌ Receiver WebRTC error:', error);
+                        console.error('Receiver WebRTC error:', error);
                     }
                 }
             );
 
-            // 初始化作為接收者並創建 Answer
             const answer = await webrtcManagerRef.current.initializeAsReceiver(offer);
 
-            // 發送 Answer 給說話者
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'webrtc_answer',
@@ -422,51 +365,40 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                     to: from,
                     answer: answer
                 }));
-                console.log('📤 Sent WebRTC answer to:', from);
             }
-
         } catch (error) {
-            console.error('❌ Failed to handle WebRTC offer:', error);
+            console.error('Failed to handle WebRTC offer:', error);
         }
     };
 
-    // WebRTC 信令處理：收到 Answer
     const handleWebRTCAnswer = async (answer: RTCSessionDescriptionInit) => {
         try {
             if (webrtcManagerRef.current) {
                 await webrtcManagerRef.current.handleAnswer(answer);
-                console.log('✅ WebRTC answer processed');
             }
         } catch (error) {
-            console.error('❌ Failed to handle WebRTC answer:', error);
+            console.error('Failed to handle WebRTC answer:', error);
         }
     };
 
-    // WebRTC 信令處理：收到 ICE Candidate
     const handleWebRTCIceCandidate = async (candidate: RTCIceCandidateInit) => {
         try {
             if (webrtcManagerRef.current) {
                 await webrtcManagerRef.current.addIceCandidate(candidate);
-                console.log('✅ ICE candidate added');
             }
         } catch (error) {
-            console.error('❌ Failed to add ICE candidate:', error);
+            console.error('Failed to add ICE candidate:', error);
         }
     };
 
-    // 請求發言權限（群組通話的搶麥機制）
     const startGroupRecording = async () => {
         try {
             const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
-
-            console.log('🎙️ Requesting PTT permission...');
             setRequestingMic(true);
 
-            // 建立 PTT_MSG_TYPE_SPEECH_START 訊息
             const tag = 'PTT_MSG_TYPE_SPEECH_START';
-            const data = '';  // 無需額外資料
+            const data = '';
 
-            // 建立 PTT 訊息格式: Tag(32) + UUID(128) + Data
             const tagBuffer = new Uint8Array(32);
             const tagBytes = new TextEncoder().encode(tag);
             tagBuffer.set(tagBytes.slice(0, 32));
@@ -481,7 +413,6 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             combined.set(uuidBuffer, 32);
             combined.set(dataBytes, 160);
 
-            // 發送請求到後端
             const response = await fetch(`${API_BASE}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -497,17 +428,13 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                 alert('請求發言權限失敗');
             }
 
-            // 等待 WebSocket 回應 (在 useEffect 中處理)
-            console.log('⏳ Waiting for PTT permission response...');
-
         } catch (error) {
-            console.error('❌ Failed to request PTT permission:', error);
+            console.error('Failed to request PTT permission:', error);
             setRequestingMic(false);
             alert('無法請求發言權限');
         }
     };
 
-    // 發送搶麥回應（同意或拒絕讓出麥克風）
     const sendMicResponse = async (requesterUUID: string, accept: boolean) => {
         try {
             const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
@@ -538,37 +465,25 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                     encoding: 'binary'
                 })
             });
-
-            console.log(`📤 Mic response sent: ${accept ? 'accept' : 'deny'} to ${requesterUUID}`);
         } catch (error) {
-            console.error('❌ Failed to send mic response:', error);
+            console.error('Failed to send mic response:', error);
         }
     };
 
-    // 實際開始錄音（內部函數，權限獲得後調用）
     const actuallyStartRecording = async () => {
         try {
-            console.log('🎙️ Permission granted, starting recording...');
-            console.log('📻 Mode:', streamingMode ? 'WebRTC Streaming' : 'Recording');
-
-            // 根據模式選擇 WebRTC 或錄音
             if (streamingMode) {
-                // 使用 WebRTC 即時串流
                 await startWebRTCStreaming();
             } else {
-                // 使用傳統錄音模式
                 await startRecordingMode();
             }
-
         } catch (error) {
-            console.error('❌ Failed to start recording:', error);
-            alert('無法訪問麥克風，請確保已授予權限');
+            console.error('Failed to start recording:', error);
+            alert('無法存取麥克風，請確保已授予權限');
         }
     };
 
-    // 傳統錄音模式（用於語音訊息）
     const startRecordingMode = async () => {
-        // 清空之前累積的轉錄文字
         finalTranscriptRef.current = '';
         setCurrentTranscript('');
 
@@ -577,13 +492,12 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                 echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: true,
-                sampleRate: 16000  // 16kHz 適合語音
+                sampleRate: 16000
             }
         });
 
         streamRef.current = stream;
 
-        // 設置音訊分析器
         if (audioContextRef.current) {
             const source = audioContextRef.current.createMediaStreamSource(stream);
             analyserRef.current = audioContextRef.current.createAnalyser();
@@ -591,7 +505,6 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             source.connect(analyserRef.current);
         }
 
-        // 創建 MediaRecorder
         const mediaRecorder = new MediaRecorder(stream, {
             mimeType: 'audio/webm;codecs=opus'
         });
@@ -608,12 +521,8 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         mediaRecorder.onstop = async () => {
             const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
             const arrayBuffer = await audioBlob.arrayBuffer();
-
-            // 群組通話：不發送轉譯文字，只發送音訊
-            console.log('📝 Sending group PTT audio (no transcript)');
             onAudioSend(arrayBuffer, false, undefined, undefined);
 
-            // 清理
             audioChunksRef.current = [];
             if (streamRef.current) {
                 streamRef.current.getTracks().forEach(track => track.stop());
@@ -621,32 +530,21 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             }
         };
 
-        mediaRecorder.start(100);  // 每 100ms 收集一次數據
+        mediaRecorder.start(100);
         setIsRecording(true);
         isRecordingRef.current = true;
-
-        // 群組通話不啟動語音識別（即時對講，不需要轉譯）
-        console.log('🎙️ Started group PTT recording (no speech recognition)');
     };
 
-    // 停止群組錄音
     const stopGroupRecording = async () => {
-        console.log('🛑 Stopping group recording/streaming...');
-        console.log('📻 Mode:', streamingMode ? 'WebRTC Streaming' : 'Recording');
-
-        // 根據模式選擇停止方式
         if (streamingMode) {
-            // 停止 WebRTC 串流
             stopWebRTCStreaming();
         } else {
-            // 停止傳統錄音
             if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
                 mediaRecorderRef.current.stop();
                 setIsRecording(false);
                 isRecordingRef.current = false;
                 setAudioLevel(0);
 
-                // 清除靜音計時器
                 if (silenceTimerRef.current) {
                     clearTimeout(silenceTimerRef.current);
                     silenceTimerRef.current = null;
@@ -654,9 +552,8 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             }
         }
 
-        setHasPermission(false);  // 釋放麥克風權限
+        setHasPermission(false);
 
-        // 發送 PTT_MSG_TYPE_SPEECH_STOP 通知後端釋放麥克風
         try {
             const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
 
@@ -686,33 +583,25 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                     encoding: 'binary'
                 })
             });
-
-            console.log('🛑 PTT_MSG_TYPE_SPEECH_STOP sent');
         } catch (error) {
-            console.error('❌ Failed to send SPEECH_STOP:', error);
+            console.error('Failed to send SPEECH_STOP:', error);
         }
-
-        console.log('✅ Stopped group recording/streaming');
     };
 
-    // 發送私人通話請求（握手）
     const startPrivateCall = async () => {
         if (!privateTargetId.trim()) {
             alert('請輸入目標設備 ID');
             return;
         }
 
-        // 生成隨機通話 Topic ID
         const callTopicId = `PRIVATE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         setRandomCallId(callTopicId);
 
         try {
-            // 發送 PRIVATE_SPK_REQ 握手請求
             const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
 
-            // 建立握手訊息: Tag + UUID + Data
             const tag = 'PRIVATE_SPK_REQ';
-            const data = `${privateTargetId},${callTopicId}`;  // "TargetUUID,PrivateTopicID"
+            const data = `${privateTargetId},${callTopicId}`;
 
             const tagBuffer = new Uint8Array(32);
             const tagBytes = new TextEncoder().encode(tag);
@@ -740,22 +629,18 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
 
             if (response.ok) {
                 setPrivateCallActive(true);
-                console.log(`📞 Private call request sent: ${deviceId} → ${privateTargetId} (Topic: ${callTopicId})`);
-                // TODO: 等待對方接受後才開始錄音
-                // 目前先直接進入通話狀態（簡化版）
             } else {
                 throw new Error('Failed to send call request');
             }
 
         } catch (error) {
-            console.error('❌ Failed to start private call:', error);
+            console.error('Failed to start private call:', error);
             alert('發送通話請求失敗');
             setPrivateCallActive(false);
             setRandomCallId('');
         }
     };
 
-    // 結束私人通話
     const endPrivateCall = async () => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
@@ -763,12 +648,11 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         setIsRecording(false);
         isRecordingRef.current = false;
 
-        // 發送 PRIVATE_SPK_STOP 通知對方
         try {
             const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
 
             const tag = 'PRIVATE_SPK_STOP';
-            const data = privateTargetId;  // TargetUUID
+            const data = privateTargetId;
 
             const tagBuffer = new Uint8Array(32);
             const tagBytes = new TextEncoder().encode(tag);
@@ -793,19 +677,15 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                     encoding: 'binary'
                 })
             });
-
-            console.log(`📞 Private call stop sent to ${privateTargetId}`);
         } catch (error) {
-            console.error('❌ Failed to send call stop:', error);
+            console.error('Failed to send call stop:', error);
         }
 
         setPrivateCallActive(false);
         setRandomCallId('');
         setAudioLevel(0);
-        console.log('📞 Ended private call');
     };
 
-    // 切換靜音
     const toggleMute = () => {
         if (streamRef.current) {
             streamRef.current.getAudioTracks().forEach(track => {
@@ -816,94 +696,99 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
     };
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-3 bg-slate-900 p-4 rounded-xl">
             {/* 群組語音 PTT */}
-            <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <h4 className="font-semibold mb-3 flex items-center gap-2">
-                    <Mic className="w-4 h-4" />
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                <h4 className="font-semibold text-sm text-slate-100 mb-3 flex items-center gap-2">
+                    <Radio className="w-4 h-4 text-blue-400" />
                     群組語音 PTT
                 </h4>
 
                 <div className="space-y-3">
                     {/* 當前頻道 */}
-                    <div className="text-sm text-gray-600">
-                        當前頻道: <span className="font-medium text-gray-900">{channel}</span>
+                    <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-400">目前頻道</span>
+                        <span className="font-medium text-slate-200 font-mono">{channel}</span>
                     </div>
 
                     {/* 頻道狀態顯示 */}
                     {isRecording ? (
-                        // 自己正在錄音
-                        <div className="bg-red-50 border border-red-200 rounded-lg p-2">
+                        <div className="bg-red-950/50 border border-red-800/50 rounded-lg p-2.5">
                             <div className="flex items-center gap-2">
-                                <Mic className="w-4 h-4 text-red-600 animate-pulse" />
-                                <div className="text-sm">
-                                    <span className="font-medium text-red-900">您正在發話中</span>
-                                </div>
+                                <Mic className="w-4 h-4 text-red-400 animate-pulse" />
+                                <span className="text-sm font-medium text-red-300">您正在發話中</span>
                             </div>
                         </div>
                     ) : currentSpeaker && currentSpeaker !== deviceId ? (
-                        // 其他人正在發話
-                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2">
+                        <div className="bg-amber-950/50 border border-amber-800/50 rounded-lg p-2.5">
                             <div className="flex items-center gap-2">
-                                <Mic className="w-4 h-4 text-yellow-600 animate-pulse" />
+                                <Mic className="w-4 h-4 text-amber-400 animate-pulse" />
                                 <div className="text-sm">
-                                    <span className="font-medium text-yellow-900">{currentSpeaker}</span>
-                                    <span className="text-yellow-700"> 正在發話中</span>
+                                    <span className="font-medium text-amber-300">{currentSpeaker}</span>
+                                    <span className="text-amber-400/80"> 正在發話中</span>
                                 </div>
                             </div>
                         </div>
                     ) : (
-                        // 頻道空閒
-                        <div className="bg-green-50 border border-green-200 rounded-lg p-2">
+                        <div className="bg-emerald-950/50 border border-emerald-800/50 rounded-lg p-2.5">
                             <div className="flex items-center gap-2">
-                                <Mic className="w-4 h-4 text-green-600" />
-                                <div className="text-sm text-green-700">
-                                    頻道空閒 - 可以發話
-                                </div>
+                                <CheckCircle className="w-4 h-4 text-emerald-400" />
+                                <span className="text-sm text-emerald-300">頻道空閒 - 可以發話</span>
                             </div>
                         </div>
                     )}
 
-                    {/* 請求中狀態 - 只在請求階段但還沒開始錄音時顯示 */}
+                    {/* 請求中狀態 */}
                     {requestingMic && !isRecording && (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-2">
+                        <div className="bg-blue-950/50 border border-blue-800/50 rounded-lg p-2.5">
                             <div className="flex items-center gap-2">
-                                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                                <div className="text-sm text-blue-700">
-                                    正在請求發話權限...
-                                </div>
+                                <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                                <span className="text-sm text-blue-300">正在請求發話權限...</span>
                             </div>
                         </div>
                     )}
 
                     {/* 模式切換 */}
-                    <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg p-2">
-                        <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                    <div className="flex items-center justify-between bg-slate-700/30 border border-slate-600/30 rounded-lg p-2.5">
+                        <label className="text-sm font-medium text-slate-300 flex items-center gap-2 cursor-pointer">
                             <input
                                 type="checkbox"
                                 checked={streamingMode}
                                 onChange={(e) => setStreamingMode(e.target.checked)}
                                 disabled={isRecording}
-                                className="w-4 h-4"
+                                className="sr-only"
                             />
-                            即時串流模式
+                            <div className={`w-8 h-4 rounded-full transition-colors ${streamingMode ? 'bg-blue-600' : 'bg-slate-600'}`}>
+                                <div className={`w-3 h-3 mt-0.5 rounded-full bg-white transition-transform ${streamingMode ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'}`} />
+                            </div>
+                            <span>即時串流模式</span>
                         </label>
-                        <span className="text-xs text-gray-500">
-                            {streamingMode ? '低延遲 < 100ms' : '錄音模式'}
+                        <span className="text-xs text-slate-500 flex items-center gap-1">
+                            {streamingMode ? (
+                                <>
+                                    <Zap className="w-3 h-3 text-blue-400" />
+                                    <span className="text-blue-400">低延遲 &lt; 100ms</span>
+                                </>
+                            ) : (
+                                <>
+                                    <Clock className="w-3 h-3" />
+                                    <span>錄音模式</span>
+                                </>
+                            )}
                         </span>
                     </div>
 
                     {/* WebRTC 連線狀態 */}
                     {streamingMode && isStreaming && (
-                        <div className="bg-green-50 border border-green-200 rounded-lg p-2">
+                        <div className="bg-emerald-950/30 border border-emerald-800/30 rounded-lg p-2">
                             <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
-                                <span className="text-xs text-green-700 font-medium">WebRTC 連線中</span>
+                                <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="text-xs text-emerald-400 font-medium">WebRTC 連線中</span>
                             </div>
                         </div>
                     )}
 
-                    {/* PTT 按鈕 - 改為點擊開始/結束 */}
+                    {/* PTT 按鈕 */}
                     <button
                         onClick={() => {
                             if (isRecording && !privateCallActive) {
@@ -913,69 +798,73 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                             }
                         }}
                         disabled={privateCallActive}
-                        className={`w-full py-4 rounded-lg font-semibold transition-all ${
+                        className={`w-full py-4 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
                             isRecording && !privateCallActive
-                                ? 'bg-red-600 text-white shadow-lg scale-105'
-                                : 'bg-blue-600 text-white hover:bg-blue-700'
-                        } disabled:bg-gray-300 disabled:cursor-not-allowed`}
+                                ? 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/30'
+                                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/30'
+                        } disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed disabled:shadow-none`}
                     >
                         {isRecording && !privateCallActive ? (
-                            <div className="flex items-center justify-center gap-2">
-                                <Mic className="w-5 h-5 animate-pulse" />
+                            <>
+                                <MicOff className="w-5 h-5" />
                                 <span>點擊停止發話</span>
-                            </div>
+                            </>
                         ) : (
-                            <div className="flex items-center justify-center gap-2">
+                            <>
                                 <Mic className="w-5 h-5" />
                                 <span>點擊開始發話 (PTT)</span>
-                            </div>
+                            </>
                         )}
                     </button>
 
                     {/* 音訊電平指示器 */}
                     {isRecording && !privateCallActive && (
-                        <div className="space-y-1">
-                            <div className="text-xs text-gray-600">音訊電平</div>
-                            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-500 flex items-center gap-1">
+                                    <Activity className="w-3 h-3" />
+                                    音訊電平
+                                </span>
+                                <span className="text-slate-400 font-mono">{Math.round(audioLevel * 100)}%</span>
+                            </div>
+                            <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                                 <div
-                                    className="h-full bg-green-500 transition-all duration-100"
+                                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-75"
                                     style={{ width: `${audioLevel * 100}%` }}
                                 />
                             </div>
                         </div>
                     )}
 
-                    {/* 群組通話不顯示即時轉錄（即時對講不需要轉譯） */}
-
                     {/* 靜音按鈕 */}
                     <button
                         onClick={toggleMute}
                         disabled={!isRecording}
-                        className={`w-full px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        className={`w-full px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 border ${
                             isMuted
-                                ? 'bg-red-100 text-red-700 border border-red-300'
-                                : 'bg-gray-100 text-gray-700 border border-gray-300'
-                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                ? 'bg-red-950/50 text-red-400 border-red-800/50 hover:bg-red-900/50'
+                                : 'bg-slate-700/50 text-slate-300 border-slate-600/50 hover:bg-slate-700'
+                        } disabled:opacity-40 disabled:cursor-not-allowed`}
                     >
                         {isMuted ? (
-                            <span className="flex items-center justify-center gap-2">
+                            <>
                                 <VolumeX className="w-4 h-4" />
-                                已靜音
-                            </span>
+                                <span>已靜音</span>
+                            </>
                         ) : (
-                            <span className="flex items-center justify-center gap-2">
+                            <>
                                 <Volume2 className="w-4 h-4" />
-                                取消靜音
-                            </span>
+                                <span>靜音</span>
+                            </>
                         )}
                     </button>
                 </div>
             </div>
 
             {/* 私人通話 */}
-            <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <h4 className="font-semibold mb-3 flex items-center gap-2">
-                    <Phone className="w-4 h-4" />
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                <h4 className="font-semibold text-sm text-slate-100 mb-3 flex items-center gap-2">
+                    <Phone className="w-4 h-4 text-emerald-400" />
                     私人通話
                 </h4>
 
@@ -987,36 +876,39 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                                 value={privateTargetId}
                                 onChange={(e) => setPrivateTargetId(e.target.value)}
                                 placeholder="輸入目標設備 ID"
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50"
                             />
                             <button
                                 onClick={startPrivateCall}
                                 disabled={isRecording || !privateTargetId.trim()}
-                                className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                className="w-full px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed"
                             >
-                                <span className="flex items-center justify-center gap-2">
-                                    <Phone className="w-4 h-4" />
-                                    發起通話
-                                </span>
+                                <Phone className="w-4 h-4" />
+                                發起通話
                             </button>
                         </>
                     ) : (
                         <div className="space-y-3">
-                            <div className="text-sm">
-                                <div className="text-gray-600">通話中</div>
-                                <div className="font-medium">→ {privateTargetId}</div>
-                                <div className="text-xs text-gray-500 mt-1">
-                                    Call ID: {randomCallId}
+                            <div className="bg-slate-700/30 rounded-lg p-3">
+                                <div className="text-xs text-slate-500 mb-1">通話中</div>
+                                <div className="font-medium text-slate-200 flex items-center gap-2">
+                                    <Phone className="w-4 h-4 text-emerald-400 animate-pulse" />
+                                    {privateTargetId}
+                                </div>
+                                <div className="text-xs text-slate-500 mt-1.5 font-mono">
+                                    ID: {randomCallId}
                                 </div>
                             </div>
 
-                            {/* 音訊電平 */}
                             {isRecording && (
-                                <div className="space-y-1">
-                                    <div className="text-xs text-gray-600">音訊電平</div>
-                                    <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                                <div className="space-y-1.5">
+                                    <div className="text-xs text-slate-500 flex items-center gap-1">
+                                        <Activity className="w-3 h-3" />
+                                        音訊電平
+                                    </div>
+                                    <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                                         <div
-                                            className="h-full bg-blue-500 transition-all duration-100"
+                                            className="h-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-75"
                                             style={{ width: `${audioLevel * 100}%` }}
                                         />
                                     </div>
@@ -1025,59 +917,72 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
 
                             <button
                                 onClick={endPrivateCall}
-                                className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                                className="w-full px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
                             >
-                                <span className="flex items-center justify-center gap-2">
-                                    <PhoneOff className="w-4 h-4" />
-                                    結束通話
-                                </span>
+                                <PhoneOff className="w-4 h-4" />
+                                結束通話
                             </button>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* 語音轉文字和自動斷句設定 */}
-            <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <h4 className="font-semibold mb-3 flex items-center justify-between">
-                    進階設定
+            {/* 進階設定 */}
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                <h4 className="font-semibold text-sm text-slate-100 mb-3 flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                        <Settings className="w-4 h-4 text-slate-400" />
+                        進階設定
+                    </span>
                     {speechRecognitionEnabled && (
-                        <span className="text-xs text-green-600 flex items-center gap-1">
-                            <span className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></span>
-                            STT 運行中
+                        <span className="text-xs text-emerald-400 flex items-center gap-1 font-normal">
+                            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+                            STT 運作中
                         </span>
                     )}
                 </h4>
 
                 <div className="space-y-3">
                     {/* 語音識別狀態 */}
-                    <div className="bg-blue-50 border border-blue-200 rounded p-2 text-xs">
-                        <div className="font-semibold mb-1">語音轉文字狀態</div>
-                        <div className="text-gray-700">
+                    <div className="bg-slate-700/30 border border-slate-600/30 rounded-lg p-2.5 text-xs">
+                        <div className="font-medium text-slate-400 mb-1">語音轉文字狀態</div>
+                        <div className="flex items-center gap-1.5">
                             {speechRecognitionEnabled ? (
-                                <span className="text-green-600">✅ 語音識別已啟動</span>
+                                <>
+                                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span className="text-emerald-400">語音識別已啟動</span>
+                                </>
                             ) : (
-                                <span className="text-gray-500">⏸️ 語音識別未啟動</span>
+                                <>
+                                    <XCircle className="w-3.5 h-3.5 text-slate-500" />
+                                    <span className="text-slate-500">語音識別未啟動</span>
+                                </>
                             )}
                         </div>
                     </div>
 
                     {/* 自動發送開關 */}
                     <div className="flex items-center justify-between">
-                        <label className="text-sm text-gray-700">自動斷句發送</label>
-                        <input
-                            type="checkbox"
-                            checked={autoSend}
-                            onChange={(e) => setAutoSend(e.target.checked)}
-                            className="w-4 h-4"
-                        />
+                        <label className="text-sm text-slate-400">自動斷句發送</label>
+                        <label className="cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={autoSend}
+                                onChange={(e) => setAutoSend(e.target.checked)}
+                                className="sr-only"
+                            />
+                            <div className={`w-8 h-4 rounded-full transition-colors ${autoSend ? 'bg-blue-600' : 'bg-slate-600'}`}>
+                                <div className={`w-3 h-3 mt-0.5 rounded-full bg-white transition-transform ${autoSend ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'}`} />
+                            </div>
+                        </label>
                     </div>
 
                     {/* 靜音閾值 */}
                     <div>
-                        <label className="text-sm text-gray-700 block mb-1">
-                            靜音閾值: {(silenceThreshold * 100).toFixed(0)}%
-                        </label>
+                        <div className="flex items-center justify-between mb-1.5">
+                            <label className="text-sm text-slate-400">靜音閾值</label>
+                            <span className="text-xs text-slate-500 font-mono">{(silenceThreshold * 100).toFixed(0)}%</span>
+                        </div>
                         <input
                             type="range"
                             min="0"
@@ -1085,15 +990,16 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                             step="0.01"
                             value={silenceThreshold}
                             onChange={(e) => setSilenceThreshold(parseFloat(e.target.value))}
-                            className="w-full"
+                            className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500"
                         />
                     </div>
 
                     {/* 靜音持續時間 */}
                     <div>
-                        <label className="text-sm text-gray-700 block mb-1">
-                            靜音持續時間: {(silenceDuration / 1000).toFixed(1)}秒
-                        </label>
+                        <div className="flex items-center justify-between mb-1.5">
+                            <label className="text-sm text-slate-400">靜音持續時間</label>
+                            <span className="text-xs text-slate-500 font-mono">{(silenceDuration / 1000).toFixed(1)} 秒</span>
+                        </div>
                         <input
                             type="range"
                             min="500"
@@ -1101,26 +1007,39 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
                             step="100"
                             value={silenceDuration}
                             onChange={(e) => setSilenceDuration(parseInt(e.target.value))}
-                            className="w-full"
+                            className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500"
                         />
                     </div>
 
-                    <div className="text-xs text-gray-600">
+                    <div className="text-xs text-slate-500">
                         啟用自動斷句後，系統會偵測靜音並自動發送語音片段
                     </div>
                 </div>
             </div>
 
             {/* 使用說明 */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-gray-700">
-                <div className="font-semibold mb-1">使用說明</div>
-                <ul className="space-y-1 list-disc list-inside">
-                    <li><strong>即時串流模式</strong>：使用 WebRTC 即時傳輸音訊，延遲 &lt; 100ms（預設）</li>
-                    <li><strong>錄音模式</strong>：錄完後發送，適合語音訊息（可關閉即時串流）</li>
-                    <li>群組語音：點擊「開始發話」開始錄音/串流，點擊「停止發話」結束</li>
-                    <li>私人通話：輸入目標 ID，點擊發起通話</li>
-                    <li>通話中無法使用群組 PTT</li>
-                    <li>自動斷句：可開啟後系統會根據靜音偵測自動分段發送（僅錄音模式）</li>
+            <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg p-3">
+                <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-2">
+                    <Info className="w-3.5 h-3.5" />
+                    <span className="font-medium">使用說明</span>
+                </div>
+                <ul className="space-y-1 text-xs text-slate-500">
+                    <li className="flex items-start gap-1.5">
+                        <Zap className="w-3 h-3 text-blue-400 mt-0.5 shrink-0" />
+                        <span><strong className="text-slate-400">即時串流模式</strong>：使用 WebRTC 即時傳輸，延遲 &lt; 100ms（預設）</span>
+                    </li>
+                    <li className="flex items-start gap-1.5">
+                        <Clock className="w-3 h-3 text-slate-400 mt-0.5 shrink-0" />
+                        <span><strong className="text-slate-400">錄音模式</strong>：錄完後發送，適合語音訊息</span>
+                    </li>
+                    <li className="flex items-start gap-1.5">
+                        <Radio className="w-3 h-3 text-slate-400 mt-0.5 shrink-0" />
+                        <span>群組語音：點擊按鈕開始/停止發話</span>
+                    </li>
+                    <li className="flex items-start gap-1.5">
+                        <Phone className="w-3 h-3 text-slate-400 mt-0.5 shrink-0" />
+                        <span>私人通話：輸入目標 ID，點擊發起通話</span>
+                    </li>
                 </ul>
             </div>
         </div>

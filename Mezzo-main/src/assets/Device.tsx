@@ -294,11 +294,11 @@ const Device = () => {
   };
 
   return (
-    <div className="flex-1 overflow-auto">
+    <div className="flex-1 overflow-auto bg-slate-900">
       {/* 頁面標題列 */}
-      <div className="border-b border-gray-200 px-6 py-4">
+      <div className="border-b border-slate-700/50 px-6 py-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold text-gray-800">Device Management</h1>
+          <h1 className="text-2xl font-semibold text-slate-100">Device Management</h1>
           <div className="flex gap-2">
             {selectedServer.type === 'tak' && (
               <button
@@ -320,7 +320,7 @@ const Device = () => {
             )}
             <button
               onClick={handleRefresh}
-              className="flex items-center space-x-2 px-3 py-1.5 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50"
+              className="flex items-center space-x-2 px-3 py-1.5 border border-slate-600 rounded text-sm text-slate-300 hover:bg-slate-800"
             >
               <RefreshCcw className="w-4 h-4" />
               <span>重新整理</span>
@@ -332,10 +332,10 @@ const Device = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
         {/* 左側：Server 清單 */}
         <div className="space-y-4">
-          <div className="bg-white rounded-lg shadow-sm">
-            <div className="p-4 border-b border-gray-200 flex items-center">
-              <Server className="w-5 h-5 text-indigo-600 mr-2" />
-              <h2 className="font-semibold text-sm text-gray-800">Servers</h2>
+          <div className="bg-slate-800/50 rounded-lg border border-slate-700/50">
+            <div className="p-4 border-b border-slate-700/50 flex items-center">
+              <Server className="w-5 h-5 text-indigo-400 mr-2" />
+              <h2 className="font-semibold text-sm text-slate-100">Servers</h2>
             </div>
             <div className="p-3 space-y-2">
               {SERVERS.map((server) => {
@@ -346,24 +346,24 @@ const Device = () => {
                     onClick={() => setSelectedServer(server)}
                     className={`w-full text-left px-3 py-2 rounded-lg border flex flex-col text-sm transition ${
                       isActive
-                        ? 'border-indigo-500 bg-indigo-50'
-                        : 'border-gray-200 bg-white hover:bg-gray-50'
+                        ? 'border-indigo-500 bg-indigo-950/50'
+                        : 'border-slate-600 bg-slate-700/50 hover:bg-slate-700'
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {server.type === 'nvr' ? (
-                          <CameraIcon className="w-4 h-4 text-blue-600" />
+                          <CameraIcon className="w-4 h-4 text-blue-400" />
                         ) : (
-                          <MapPin className="w-4 h-4 text-green-600" />
+                          <MapPin className="w-4 h-4 text-emerald-400" />
                         )}
-                        <span className="font-semibold text-gray-800">{server.name}</span>
+                        <span className="font-semibold text-slate-200">{server.name}</span>
                       </div>
                       {server.note && (
-                        <span className="text-xs text-gray-500">{server.note}</span>
+                        <span className="text-xs text-slate-400">{server.note}</span>
                       )}
                     </div>
-                    <div className="text-xs text-gray-500 mt-1 ml-6">
+                    <div className="text-xs text-slate-400 mt-1 ml-6">
                       {server.displayHost}
                     </div>
                   </button>
@@ -373,7 +373,7 @@ const Device = () => {
           </div>
 
           {/* 提示 */}
-          <div className="bg-yellow-50 border border-yellow-200 text-xs text-yellow-800 rounded-lg p-3">
+          <div className="bg-amber-950/50 border border-amber-800/50 text-xs text-amber-300 rounded-lg p-3">
             <p className="font-semibold flex items-center mb-1">
               <AlertCircle className="w-4 h-4 mr-1" />
               提醒
@@ -381,7 +381,7 @@ const Device = () => {
             <p>
               {selectedServer.type === 'nvr' ? (
                 <>
-                  NVR 請透過 Vite Proxy <code className="mx-1">/nvr</code> 存取
+                  NVR 請透過 Vite Proxy <code className="mx-1 bg-amber-900/50 px-1 rounded">/nvr</code> 存取
                 </>
               ) : (
                 <>
@@ -396,10 +396,10 @@ const Device = () => {
         <div className="lg:col-span-2 space-y-6">
           {/* 註冊表單（僅 ATAK Server） */}
           {selectedServer.type === 'tak' && showRegisterForm && (
-            <div className="bg-white rounded-lg shadow-sm border-2 border-blue-200">
-              <div className="p-4 border-b border-gray-200 bg-blue-50">
-                <h2 className="font-semibold text-sm text-gray-800 flex items-center gap-2">
-                  <Plus className="w-4 h-4" />
+            <div className="bg-slate-800/50 rounded-lg border-2 border-blue-700/50">
+              <div className="p-4 border-b border-slate-700/50 bg-blue-950/50">
+                <h2 className="font-semibold text-sm text-slate-100 flex items-center gap-2">
+                  <Plus className="w-4 h-4 text-blue-400" />
                   註冊新設備
                 </h2>
               </div>
@@ -408,8 +408,8 @@ const Device = () => {
                   <div
                     className={`mb-3 p-3 rounded text-sm ${
                       registerMessage.type === 'success'
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-red-100 text-red-800'
+                        ? 'bg-emerald-950/50 text-emerald-300 border border-emerald-800/50'
+                        : 'bg-red-950/50 text-red-300 border border-red-800/50'
                     }`}
                   >
                     {registerMessage.text}
@@ -419,7 +419,7 @@ const Device = () => {
                 <form onSubmit={handleRegisterDevice} className="space-y-3">
                   {/* 串流類型 */}
                   <div className="flex gap-4 text-sm">
-                    <label className="flex items-center cursor-pointer">
+                    <label className="flex items-center cursor-pointer text-slate-200">
                       <input
                         type="radio"
                         value="rtsp"
@@ -431,7 +431,7 @@ const Device = () => {
                       />
                       <span className="font-medium">RTSP 串流</span>
                     </label>
-                    <label className="flex items-center cursor-pointer">
+                    <label className="flex items-center cursor-pointer text-slate-200">
                       <input
                         type="radio"
                         value="http"
@@ -448,7 +448,7 @@ const Device = () => {
                   <div className="grid grid-cols-2 gap-3">
                     {/* 設備 ID */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         設備 ID *
                       </label>
                       <input
@@ -459,13 +459,13 @@ const Device = () => {
                         onChange={(e) =>
                           setFormData({ ...formData, streamId: e.target.value })
                         }
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
 
                     {/* 顯示名稱 */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         顯示名稱
                       </label>
                       <input
@@ -475,13 +475,13 @@ const Device = () => {
                         onChange={(e) =>
                           setFormData({ ...formData, callsign: e.target.value })
                         }
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
 
                     {/* 串流 URL */}
                     <div className="col-span-2">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         {formData.streamType === 'rtsp' ? 'RTSP URL *' : 'HTTP/MJPEG URL *'}
                       </label>
                       <input
@@ -496,9 +496,9 @@ const Device = () => {
                         onChange={(e) =>
                           setFormData({ ...formData, streamUrl: e.target.value })
                         }
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
-                      <p className="text-xs text-gray-500 mt-1">
+                      <p className="text-xs text-slate-400 mt-1">
                         {formData.streamType === 'rtsp'
                           ? '支援 RTSP 協議的攝像頭串流 URL'
                           : '支援 HTTP MJPEG 串流，例如 IP 攝像頭的 MJPEG 端點'}
@@ -507,7 +507,7 @@ const Device = () => {
 
                     {/* 緯度 */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         緯度 *
                       </label>
                       <input
@@ -516,13 +516,13 @@ const Device = () => {
                         required
                         value={formData.lat}
                         onChange={(e) => setFormData({ ...formData, lat: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
 
                     {/* 經度 */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         經度 *
                       </label>
                       <input
@@ -531,26 +531,26 @@ const Device = () => {
                         required
                         value={formData.lon}
                         onChange={(e) => setFormData({ ...formData, lon: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
 
                     {/* 海拔 */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         海拔 (m)
                       </label>
                       <input
                         type="number"
                         value={formData.alt}
                         onChange={(e) => setFormData({ ...formData, alt: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
 
                     {/* 優先級 */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         優先級
                       </label>
                       <select
@@ -558,7 +558,7 @@ const Device = () => {
                         onChange={(e) =>
                           setFormData({ ...formData, priority: e.target.value })
                         }
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
                         <option value="1">P1 - 最高</option>
                         <option value="2">P2 - 高</option>
@@ -569,7 +569,7 @@ const Device = () => {
 
                     {/* 群組 */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
                         群組
                       </label>
                       <input
@@ -579,14 +579,14 @@ const Device = () => {
                         onChange={(e) =>
                           setFormData({ ...formData, group: e.target.value })
                         }
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
                   </div>
 
                   {/* 串流模式選項 (僅 HTTP/MJPEG 顯示) */}
                   {formData.streamType === 'http' && (
-                    <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                    <div className="bg-blue-950/50 border border-blue-800/50 rounded p-3">
                       <label className="flex items-center cursor-pointer">
                         <input
                           type="checkbox"
@@ -597,12 +597,12 @@ const Device = () => {
                           className="mr-2 w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
                         />
                         <div>
-                          <span className="text-sm font-medium text-gray-700">
+                          <span className="text-sm font-medium text-slate-200">
                             使用直接串流（推薦）
                           </span>
-                          <p className="text-xs text-gray-600 mt-1">
-                            ✅ MJPEG 可直接顯示，無需轉換，立即可用<br/>
-                            ❌ 取消勾選將使用 FFmpeg 轉換為 HLS（需等待數秒）
+                          <p className="text-xs text-slate-400 mt-1">
+                            MJPEG 可直接顯示，無需轉換，立即可用<br/>
+                            取消勾選將使用 FFmpeg 轉換為 HLS（需等待數秒）
                           </p>
                         </div>
                       </label>
@@ -613,9 +613,9 @@ const Device = () => {
                   <button
                     type="submit"
                     disabled={registering}
-                    className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                    className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:bg-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
                   >
-                    {registering ? '註冊中...' : '✅ 註冊設備'}
+                    {registering ? '註冊中...' : '註冊設備'}
                   </button>
                 </form>
               </div>
@@ -624,46 +624,46 @@ const Device = () => {
 
           {/* NVR Server Info */}
           {selectedServer.type === 'nvr' && (
-            <div className="bg-white rounded-lg shadow-sm">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700/50">
+              <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <HardDrive className="w-5 h-5 text-blue-600" />
-                  <h2 className="font-semibold text-sm text-gray-800">NVR Server Info</h2>
+                  <HardDrive className="w-5 h-5 text-blue-400" />
+                  <h2 className="font-semibold text-sm text-slate-100">NVR Server Info</h2>
                 </div>
-                {loadingInfo && <span className="text-xs text-gray-500">載入中…</span>}
+                {loadingInfo && <span className="text-xs text-slate-400">載入中…</span>}
               </div>
               <div className="p-4">
                 {serverInfo ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">Model</div>
-                      <div className="font-semibold text-gray-800">{serverInfo.ModelName}</div>
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">Model</div>
+                      <div className="font-semibold text-slate-200">{serverInfo.ModelName}</div>
                     </div>
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">Version</div>
-                      <div className="font-mono text-gray-800">{serverInfo.Version}</div>
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">Version</div>
+                      <div className="font-mono text-slate-200">{serverInfo.Version}</div>
                     </div>
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">Host Name</div>
-                      <div className="text-gray-800">{serverInfo.HostName}</div>
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">Host Name</div>
+                      <div className="text-slate-200">{serverInfo.HostName}</div>
                     </div>
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">HTTP Port</div>
-                      <div className="text-gray-800">{serverInfo.PortBase}</div>
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">HTTP Port</div>
+                      <div className="text-slate-200">{serverInfo.PortBase}</div>
                     </div>
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">RTSP Port</div>
-                      <div className="text-gray-800">{serverInfo.RTSPPort}</div>
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">RTSP Port</div>
+                      <div className="text-slate-200">{serverInfo.RTSPPort}</div>
                     </div>
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">Channels</div>
-                      <div className="text-gray-800">
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">Channels</div>
+                      <div className="text-slate-200">
                         {serverInfo.VideoCount} / {serverInfo.MaxVideoCount}
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="text-sm text-gray-500">尚未取得伺服器資訊</div>
+                  <div className="text-sm text-slate-400">尚未取得伺服器資訊</div>
                 )}
               </div>
             </div>
@@ -671,68 +671,68 @@ const Device = () => {
 
           {/* ATAK Server Info */}
           {selectedServer.type === 'tak' && (
-            <div className="bg-white rounded-lg shadow-sm">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700/50">
+              <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <Wifi className="w-5 h-5 text-green-600" />
-                  <h2 className="font-semibold text-sm text-gray-800">ATAK Server Status</h2>
+                  <Wifi className="w-5 h-5 text-emerald-400" />
+                  <h2 className="font-semibold text-sm text-slate-100">ATAK Server Status</h2>
                 </div>
-                {loadingCamera && <span className="text-xs text-gray-500">載入中…</span>}
+                {loadingCamera && <span className="text-xs text-slate-400">載入中…</span>}
               </div>
               <div className="p-4">
                 {atakStatus ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">狀態</div>
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">狀態</div>
                       <div className="flex items-center gap-2">
                         <span
                           className={`w-2 h-2 rounded-full ${
-                            atakStatus.connected ? 'bg-green-500' : 'bg-red-500'
+                            atakStatus.connected ? 'bg-emerald-500' : 'bg-red-500'
                           }`}
                         />
-                        <span className="font-semibold text-gray-800">
+                        <span className="font-semibold text-slate-200">
                           {atakStatus.connected ? '已連接' : '未連接'}
                         </span>
                       </div>
                     </div>
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">設備數量</div>
-                      <div className="font-semibold text-gray-800">
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">設備數量</div>
+                      <div className="font-semibold text-slate-200">
                         {atakStatus.deviceCount} 個設備
                       </div>
                     </div>
                     <div>
-                      <div className="text-gray-500 text-xs uppercase tracking-wide">伺服器</div>
-                      <div className="text-gray-800">{selectedServer.displayHost}</div>
+                      <div className="text-slate-400 text-xs uppercase tracking-wide">伺服器</div>
+                      <div className="text-slate-200">{selectedServer.displayHost}</div>
                     </div>
                     {atakStatus.lastUpdate && (
                       <div>
-                        <div className="text-gray-500 text-xs uppercase tracking-wide">
+                        <div className="text-slate-400 text-xs uppercase tracking-wide">
                           最後更新
                         </div>
-                        <div className="text-gray-800 text-xs">
+                        <div className="text-slate-300 text-xs">
                           {new Date(atakStatus.lastUpdate).toLocaleString('zh-TW')}
                         </div>
                       </div>
                     )}
                   </div>
                 ) : (
-                  <div className="text-sm text-gray-500">載入伺服器狀態中…</div>
+                  <div className="text-sm text-slate-400">載入伺服器狀態中…</div>
                 )}
               </div>
             </div>
           )}
 
           {/* Camera/Device List */}
-          <div className="bg-white rounded-lg shadow-sm">
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+          <div className="bg-slate-800/50 rounded-lg border border-slate-700/50">
+            <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
               <div className="flex items-center space-x-2">
-                <CameraIcon className="w-5 h-5 text-green-600" />
-                <h2 className="font-semibold text-sm text-gray-800">
+                <CameraIcon className="w-5 h-5 text-emerald-400" />
+                <h2 className="font-semibold text-sm text-slate-100">
                   {selectedServer.type === 'nvr' ? 'Camera List' : 'GPS Devices'}
                 </h2>
               </div>
-              {loadingCamera && <span className="text-xs text-gray-500">載入中…</span>}
+              {loadingCamera && <span className="text-xs text-slate-400">載入中…</span>}
             </div>
 
             <div className="p-4 overflow-auto">
@@ -740,36 +740,36 @@ const Device = () => {
               {selectedServer.type === 'nvr' && (
                 <>
                   {cameraList.length === 0 && !loadingCamera ? (
-                    <div className="text-sm text-gray-500 text-center py-6">
+                    <div className="text-sm text-slate-400 text-center py-6">
                       目前沒有攝影機資料
                     </div>
                   ) : (
                     <table className="min-w-full text-sm">
-                      <thead className="bg-gray-50">
+                      <thead className="bg-slate-700/50">
                         <tr>
-                          <th className="px-3 py-2 text-left font-semibold">Channel</th>
-                          <th className="px-3 py-2 text-left font-semibold">Status</th>
-                          <th className="px-3 py-2 text-left font-semibold">Description</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">Channel</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">Status</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">Description</th>
                         </tr>
                       </thead>
                       <tbody>
                         {cameraList.map((cam) => (
-                          <tr key={cam.channelID} className="odd:bg-white even:bg-gray-50">
-                            <td className="px-3 py-2 font-mono">{cam.channelID}</td>
+                          <tr key={cam.channelID} className="odd:bg-slate-800/30 even:bg-slate-700/30 border-b border-slate-700/30">
+                            <td className="px-3 py-2 font-mono text-slate-300">{cam.channelID}</td>
                             <td className="px-3 py-2">
                               {cam.Enable === '1' ? (
-                                <span className="inline-flex items-center text-xs text-green-700">
-                                  <span className="w-2 h-2 rounded-full bg-green-500 mr-1" />
+                                <span className="inline-flex items-center text-xs text-emerald-400">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 mr-1" />
                                   Enabled
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center text-xs text-gray-600">
-                                  <span className="w-2 h-2 rounded-full bg-gray-400 mr-1" />
+                                <span className="inline-flex items-center text-xs text-slate-400">
+                                  <span className="w-2 h-2 rounded-full bg-slate-500 mr-1" />
                                   Disabled
                                 </span>
                               )}
                             </td>
-                            <td className="px-3 py-2 text-gray-800">{cam.desc}</td>
+                            <td className="px-3 py-2 text-slate-300">{cam.desc}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -782,46 +782,46 @@ const Device = () => {
               {selectedServer.type === 'tak' && (
                 <>
                   {gpsDevices.length === 0 && !loadingCamera ? (
-                    <div className="text-sm text-gray-500 text-center py-6">
+                    <div className="text-sm text-slate-400 text-center py-6">
                       目前沒有 GPS 設備
                       <br />
                       點擊上方「註冊設備」按鈕新增設備
                     </div>
                   ) : (
                     <table className="min-w-full text-sm">
-                      <thead className="bg-gray-50">
+                      <thead className="bg-slate-700/50">
                         <tr>
-                          <th className="px-3 py-2 text-left font-semibold">設備 ID</th>
-                          <th className="px-3 py-2 text-left font-semibold">名稱</th>
-                          <th className="px-3 py-2 text-left font-semibold">類型</th>
-                          <th className="px-3 py-2 text-left font-semibold">位置</th>
-                          <th className="px-3 py-2 text-left font-semibold">優先級</th>
-                          <th className="px-3 py-2 text-left font-semibold">狀態</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">設備 ID</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">名稱</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">類型</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">位置</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">優先級</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-200">狀態</th>
                         </tr>
                       </thead>
                       <tbody>
                         {gpsDevices.map((device) => (
-                          <tr key={device.id} className="odd:bg-white even:bg-gray-50">
-                            <td className="px-3 py-2 font-mono">{device.id}</td>
-                            <td className="px-3 py-2">{device.callsign || '-'}</td>
+                          <tr key={device.id} className="odd:bg-slate-800/30 even:bg-slate-700/30 border-b border-slate-700/30">
+                            <td className="px-3 py-2 font-mono text-slate-300">{device.id}</td>
+                            <td className="px-3 py-2 text-slate-300">{device.callsign || '-'}</td>
                             <td className="px-3 py-2">
-                              <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+                              <span className="text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded border border-blue-700/50">
                                 {device.type}
                               </span>
                             </td>
-                            <td className="px-3 py-2 font-mono text-xs">
+                            <td className="px-3 py-2 font-mono text-xs text-slate-400">
                               {device.position.lat.toFixed(4)}, {device.position.lng.toFixed(4)}
                             </td>
                             <td className="px-3 py-2">
                               <span
                                 className={`text-xs px-2 py-0.5 rounded font-bold text-white ${
                                   device.priority === 1
-                                    ? 'bg-red-500'
+                                    ? 'bg-red-600'
                                     : device.priority === 2
-                                    ? 'bg-orange-500'
+                                    ? 'bg-orange-600'
                                     : device.priority === 3
-                                    ? 'bg-blue-500'
-                                    : 'bg-gray-500'
+                                    ? 'bg-blue-600'
+                                    : 'bg-slate-600'
                                 }`}
                               >
                                 P{device.priority || 3}
@@ -829,13 +829,13 @@ const Device = () => {
                             </td>
                             <td className="px-3 py-2">
                               {device.status === 'active' ? (
-                                <span className="inline-flex items-center text-xs text-green-700">
-                                  <span className="w-2 h-2 rounded-full bg-green-500 mr-1" />
+                                <span className="inline-flex items-center text-xs text-emerald-400">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 mr-1" />
                                   在線
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center text-xs text-gray-600">
-                                  <span className="w-2 h-2 rounded-full bg-gray-400 mr-1" />
+                                <span className="inline-flex items-center text-xs text-slate-400">
+                                  <span className="w-2 h-2 rounded-full bg-slate-500 mr-1" />
                                   離線
                                 </span>
                               )}
@@ -850,7 +850,7 @@ const Device = () => {
             </div>
 
             {error && (
-              <div className="border-t border-gray-100 bg-red-50 text-xs text-red-700 px-4 py-2 flex items-center">
+              <div className="border-t border-slate-700/50 bg-red-950/50 text-xs text-red-300 px-4 py-2 flex items-center">
                 <AlertCircle className="w-4 h-4 mr-1" />
                 {error}
               </div>

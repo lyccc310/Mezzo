@@ -4,7 +4,7 @@ import VideoPlayer from './VideoPlayer';
 import PTTAudio from './PTTAudio';
 import { getFullStreamUrl } from '../config/api';
 import { Device, Message } from '../types';
-import { MapPin, Video, Wifi, Activity, Clock, Send, Users, MessageSquare, Radio, AlertCircle, Mic } from 'lucide-react';
+import { MapPin, Video, Wifi, Activity, Clock, Send, Users, MessageSquare, Radio, AlertCircle, Mic, Navigation } from 'lucide-react';
 
 // ===== 配置 =====
 const API_CONFIG = {
@@ -19,8 +19,8 @@ const API_CONFIG = {
 
 const WS_URL = API_CONFIG.baseUrl.replace('http', 'ws').replace(':4000', ':4001');
 
-console.log('📡 GPSTracking API Config:', API_CONFIG.baseUrl);
-console.log('📡 GPSTracking WebSocket:', WS_URL);
+console.log('[GPSTracking] API Config:', API_CONFIG.baseUrl);
+console.log('[GPSTracking] WebSocket:', WS_URL);
 
 interface GPSTrackingProps {
     userName?: string;
@@ -51,6 +51,9 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     const pttDeviceId = userName || `USER-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const [gpsLat, setGpsLat] = useState('25.033964');
     const [gpsLon, setGpsLon] = useState('121.564472');
+    const [autoLocationEnabled, setAutoLocationEnabled] = useState(false);
+    const [locationError, setLocationError] = useState<string | null>(null);
+    const locationWatchIdRef = useRef<number | null>(null);
     const [sosLat, setSosLat] = useState('25.033964');
     const [sosLon, setSosLon] = useState('121.564472');
     const [broadcastMsg, setBroadcastMsg] = useState('');
@@ -83,11 +86,11 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     // ===== PTT 功能列表 =====
     const pttFunctions = [
         { value: '', label: '請選擇 PTT 功能...' },
-        { value: 'gps', label: '📍 GPS 位置發送' },
-        { value: 'sos', label: '🆘 SOS 緊急警報' },
-        { value: 'broadcast', label: '📢 廣播訊息' },
-        { value: 'recording', label: '📹 錄影控制' },
-        { value: 'audio', label: '🎙️ 語音通話' },
+        { value: 'gps', label: 'GPS 位置發送' },
+        { value: 'sos', label: 'SOS 緊急警報' },
+        { value: 'broadcast', label: '廣播訊息' },
+        { value: 'recording', label: '錄影控制' },
+        { value: 'audio', label: '語音通話' },
     ];
 
     // ===== PTT 函數 =====
@@ -140,10 +143,13 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
         }
     };
 
-    const sendPTTGPS = async () => {
+    const sendPTTGPS = async (lat?: string, lon?: string) => {
         try {
+            const sendLat = lat || gpsLat;
+            const sendLon = lon || gpsLon;
+
             const topic = `/WJI/PTT/${pttChannel}/GPS`;
-            const data = `${pttDeviceId},${gpsLat},${gpsLon}`;
+            const data = `${pttDeviceId},${sendLat},${sendLon}`;
             const message = createPTTMessage('GPS', pttDeviceId, data);
 
             const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
@@ -154,14 +160,14 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
             if (response.ok) {
                 showPTTStatus(`✅ GPS 已發送至 ${topic}`, 'success');
-                console.log('📍 PTT GPS sent:', { topic, lat: gpsLat, lon: gpsLon });
+                console.log('📍 PTT GPS sent:', { topic, lat: sendLat, lon: sendLon });
 
                 // 在通訊面板顯示 GPS 發送通知
                 const notificationMessage: Message = {
                     id: `gps-${Date.now()}`,
                     from: pttDeviceId,
                     to: `group:${pttChannel}`,
-                    text: `📍 發送了位置資訊 (${gpsLat}, ${gpsLon})`,
+                    text: `📍 發送了位置資訊 (${sendLat}, ${sendLon})`,
                     timestamp: new Date().toISOString(),
                     priority: 3
                 };
@@ -288,6 +294,133 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
             showPTTStatus('❌ 錄影控制失敗', 'error');
         }
     };
+
+    // ===== 自動定位功能 =====
+    const startAutoLocation = () => {
+        if (!navigator.geolocation) {
+            setLocationError('瀏覽器不支援地理位置功能');
+            showPTTStatus('❌ 瀏覽器不支援地理位置功能', 'error');
+            return;
+        }
+
+        setLocationError(null);
+        showPTTStatus('🌍 正在獲取位置...', 'info');
+
+        // 獲取初始位置
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const lat = position.coords.latitude.toFixed(6);
+                const lon = position.coords.longitude.toFixed(6);
+
+                setGpsLat(lat);
+                setGpsLon(lon);
+                setAutoLocationEnabled(true);
+
+                // 立即發送位置
+                sendPTTGPS(lat, lon);
+                showPTTStatus(`✅ 位置已更新：${lat}, ${lon}`, 'success');
+
+                console.log('📍 Auto location enabled:', { lat, lon, accuracy: position.coords.accuracy });
+            },
+            (error) => {
+                let errorMessage = '無法獲取位置';
+                switch (error.code) {
+                    case error.PERMISSION_DENIED:
+                        errorMessage = '用戶拒絕位置權限';
+                        break;
+                    case error.POSITION_UNAVAILABLE:
+                        errorMessage = '位置資訊無法使用';
+                        break;
+                    case error.TIMEOUT:
+                        errorMessage = '獲取位置超時';
+                        break;
+                }
+                setLocationError(errorMessage);
+                showPTTStatus(`❌ ${errorMessage}`, 'error');
+                console.error('❌ Geolocation error:', error);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            }
+        );
+
+        // 開始監聽位置變化
+        const watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                const lat = position.coords.latitude.toFixed(6);
+                const lon = position.coords.longitude.toFixed(6);
+
+                // 只有位置變化超過 10 米才更新
+                const oldLat = parseFloat(gpsLat);
+                const oldLon = parseFloat(gpsLon);
+                const distance = calculateDistance(oldLat, oldLon, parseFloat(lat), parseFloat(lon));
+
+                if (distance > 0.01) { // 大於 10 米
+                    setGpsLat(lat);
+                    setGpsLon(lon);
+                    sendPTTGPS(lat, lon);
+                    console.log(`📍 Location updated: ${lat}, ${lon} (moved ${(distance * 1000).toFixed(0)}m)`);
+                }
+            },
+            (error) => {
+                console.warn('⚠️ Watch position error:', error);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 30000,
+                maximumAge: 5000
+            }
+        );
+
+        locationWatchIdRef.current = watchId;
+    };
+
+    const stopAutoLocation = () => {
+        if (locationWatchIdRef.current !== null) {
+            navigator.geolocation.clearWatch(locationWatchIdRef.current);
+            locationWatchIdRef.current = null;
+        }
+        setAutoLocationEnabled(false);
+        showPTTStatus('⏹️ 自動定位已停止', 'info');
+        console.log('⏹️ Auto location stopped');
+    };
+
+    // 計算兩點之間的距離（km）
+    const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+        const R = 6371; // 地球半徑（公里）
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    };
+
+    // 清理定位監聽
+    useEffect(() => {
+        return () => {
+            if (locationWatchIdRef.current !== null) {
+                navigator.geolocation.clearWatch(locationWatchIdRef.current);
+            }
+        };
+    }, []);
+
+    // 自動定位時定期發送位置（每 30 秒）
+    useEffect(() => {
+        if (!autoLocationEnabled) return;
+
+        const intervalId = setInterval(() => {
+            // 每 30 秒重新發送當前位置，確保在地圖上保持顯示
+            sendPTTGPS();
+            console.log('🔄 Auto location update sent');
+        }, 30000); // 30 秒
+
+        return () => clearInterval(intervalId);
+    }, [autoLocationEnabled, gpsLat, gpsLon, pttChannel]);
 
     // ===== 音訊發送函數 =====
     const handleAudioSend = async (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string, transcript?: string) => {
@@ -958,67 +1091,110 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     const renderPTTFunctionContent = () => {
         if (selectedPTTFunction === 'gps') {
             return (
-                <div className="border border-green-200 rounded-lg p-4 space-y-3 bg-green-50">
-                    <div className="flex items-center gap-2 text-base font-semibold text-green-700">
-                        <MapPin className="w-5 h-5" />
-                        GPS 位置發送
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="block text-xs font-medium text-gray-700 mb-1">緯度</label>
-                            <input
-                                type="text"
-                                value={gpsLat}
-                                onChange={(e) => setGpsLat(e.target.value)}
-                                placeholder="25.033964"
-                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-                            />
+                <div className="border border-emerald-800/50 rounded-lg p-4 space-y-3 bg-emerald-950/50">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-base font-semibold text-emerald-300">
+                            <MapPin className="w-5 h-5" />
+                            GPS 位置發送
                         </div>
-                        <div>
-                            <label className="block text-xs font-medium text-gray-700 mb-1">經度</label>
-                            <input
-                                type="text"
-                                value={gpsLon}
-                                onChange={(e) => setGpsLon(e.target.value)}
-                                placeholder="121.564472"
-                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-                            />
-                        </div>
+                        {autoLocationEnabled && (
+                            <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                <span>自動定位中</span>
+                            </div>
+                        )}
                     </div>
-                    <button onClick={sendPTTGPS} className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2">
-                        <MapPin className="w-4 h-4" />
-                        發送 GPS 位置
+
+                    {/* 自動定位按鈕 */}
+                    <button
+                        onClick={autoLocationEnabled ? stopAutoLocation : startAutoLocation}
+                        className={`w-full text-white text-sm font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors ${
+                            autoLocationEnabled
+                                ? 'bg-slate-600 hover:bg-slate-500'
+                                : 'bg-blue-600 hover:bg-blue-700'
+                        }`}
+                    >
+                        <Navigation className="w-4 h-4" />
+                        {autoLocationEnabled ? '停止自動定位' : '啟用自動定位'}
                     </button>
+
+                    {locationError && (
+                        <div className="px-3 py-2 bg-red-950/50 border border-red-800/50 rounded-lg text-xs text-red-300">
+                            {locationError}
+                        </div>
+                    )}
+
+                    <div className="border-t border-emerald-800/30 pt-3">
+                        <div className="text-xs text-slate-400 mb-2">手動輸入座標</div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-slate-300 mb-1">緯度</label>
+                                <input
+                                    type="text"
+                                    value={gpsLat}
+                                    onChange={(e) => setGpsLat(e.target.value)}
+                                    placeholder="25.033964"
+                                    disabled={autoLocationEnabled}
+                                    className={`w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500 ${
+                                        autoLocationEnabled ? 'opacity-50 cursor-not-allowed' : ''
+                                    }`}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-slate-300 mb-1">經度</label>
+                                <input
+                                    type="text"
+                                    value={gpsLon}
+                                    onChange={(e) => setGpsLon(e.target.value)}
+                                    placeholder="121.564472"
+                                    disabled={autoLocationEnabled}
+                                    className={`w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500 ${
+                                        autoLocationEnabled ? 'opacity-50 cursor-not-allowed' : ''
+                                    }`}
+                                />
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => sendPTTGPS()}
+                            disabled={autoLocationEnabled}
+                            className={`w-full mt-3 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2 ${
+                                autoLocationEnabled ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
+                        >
+                            <MapPin className="w-4 h-4" />
+                            手動發送 GPS 位置
+                        </button>
+                    </div>
                 </div>
             );
         }
 
         if (selectedPTTFunction === 'sos') {
             return (
-                <div className="border border-red-300 rounded-lg p-4 space-y-3 bg-red-50">
-                    <div className="flex items-center gap-2 text-base font-semibold text-red-700">
+                <div className="border border-red-800/50 rounded-lg p-4 space-y-3 bg-red-950/50">
+                    <div className="flex items-center gap-2 text-base font-semibold text-red-300">
                         <AlertCircle className="w-5 h-5" />
                         SOS 緊急警報
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs font-medium text-gray-700 mb-1">緯度</label>
+                            <label className="block text-xs font-medium text-slate-300 mb-1">緯度</label>
                             <input
                                 type="text"
                                 value={sosLat}
                                 onChange={(e) => setSosLat(e.target.value)}
                                 placeholder="25.033964"
-                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                                className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-red-500"
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-medium text-gray-700 mb-1">經度</label>
+                            <label className="block text-xs font-medium text-slate-300 mb-1">經度</label>
                             <input
                                 type="text"
                                 value={sosLon}
                                 onChange={(e) => setSosLon(e.target.value)}
                                 placeholder="121.564472"
-                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                                className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded-lg focus:ring-2 focus:ring-red-500"
                             />
                         </div>
                     </div>
@@ -1032,19 +1208,19 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
         if (selectedPTTFunction === 'broadcast') {
             return (
-                <div className="border border-blue-200 rounded-lg p-4 space-y-3 bg-blue-50">
-                    <div className="flex items-center gap-2 text-base font-semibold text-blue-700">
+                <div className="border border-blue-800/50 rounded-lg p-4 space-y-3 bg-blue-950/50">
+                    <div className="flex items-center gap-2 text-base font-semibold text-blue-300">
                         <MessageSquare className="w-4 h-4" />
                         廣播訊息
                     </div>
                     <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">訊息內容</label>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">訊息內容</label>
                         <textarea
                             value={broadcastMsg}
                             onChange={(e) => setBroadcastMsg(e.target.value)}
                             placeholder="輸入要廣播的訊息..."
                             rows={3}
-                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500"
+                            className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded-lg resize-none focus:ring-2 focus:ring-blue-500"
                         />
                     </div>
                     <button onClick={sendPTTBroadcast} className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2">
@@ -1057,21 +1233,21 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
         if (selectedPTTFunction === 'recording') {
             return (
-                <div className="border border-purple-200 rounded-lg p-4 space-y-3 bg-purple-50">
-                    <div className="flex items-center gap-2 text-base font-semibold text-purple-700">
+                <div className="border border-purple-800/50 rounded-lg p-4 space-y-3 bg-purple-950/50">
+                    <div className="flex items-center gap-2 text-base font-semibold text-purple-300">
                         <Video className="w-5 h-5" />
                         錄影控制
                     </div>
                     <button
                         onClick={toggleRecording}
-                        className={`w-full text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2 ${isRecording ? 'bg-gray-600 hover:bg-gray-700' : 'bg-purple-600 hover:bg-purple-700'}`}
+                        className={`w-full text-white text-sm font-semibold py-3 rounded-lg flex items-center justify-center gap-2 ${isRecording ? 'bg-slate-600 hover:bg-slate-500' : 'bg-purple-600 hover:bg-purple-700'}`}
                     >
                         <Video className="w-4 h-4" />
-                        {isRecording ? '⏹️ 停止錄影' : '📹 開始錄影'}
+                        {isRecording ? '停止錄影' : '開始錄影'}
                     </button>
                     {isRecording && (
-                        <div className="flex items-center justify-center gap-2 text-red-600 bg-red-50 py-2 rounded-lg">
-                            <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
+                        <div className="flex items-center justify-center gap-2 text-red-300 bg-red-950/50 py-2 rounded-lg border border-red-800/50">
+                            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
                             <span className="text-sm font-medium">錄影進行中...</span>
                         </div>
                     )}
@@ -1081,7 +1257,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
         if (selectedPTTFunction === 'audio') {
             return (
-                <div className="border border-purple-200 rounded-lg p-4 bg-purple-50">
+                <div className="border border-purple-800/50 rounded-lg p-4 bg-purple-950/30">
                     <PTTAudio
                         deviceId={pttDeviceId}
                         channel={pttChannel}
@@ -1134,7 +1310,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     }, [messages.length, showCommunication]);
 
     return (
-        <div className="flex overflow-auto bg-gray-100">
+        <div className="flex overflow-auto bg-slate-900">
             {/* 左側：地圖 (50%) - 固定 */}
             <div className="w-1/2 h-full">
                 <CameraMap
@@ -1145,26 +1321,26 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
             </div>
 
             {/* 右側：設備資訊面板 (50%) - 獨立滾動 */}
-            <div className="w-1/2 h-full flex flex-col border-l border-gray-200 overflow-hidden">
+            <div className="w-1/2 h-full flex flex-col border-l border-slate-700/50 overflow-hidden">
                 {/* 固定的狀態欄和按鈕 */}
-                <div className="flex-shrink-0 bg-white border-b border-gray-200">
+                <div className="flex-shrink-0 bg-slate-800/50 border-b border-slate-700/50">
                     {/* 狀態欄 */}
                     <div className="px-4 py-2 flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <div className="flex items-center gap-2">
-                                <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                                <span className="text-xs font-medium text-gray-700">
+                                <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                                <span className="text-xs font-medium text-slate-300">
                                     {wsConnected ? 'WebSocket 已連接' : 'WebSocket 未連接'}
                                 </span>
                             </div>
-                            <div className="text-xs text-gray-500">
+                            <div className="text-xs text-slate-400">
                                 設備總數: {devices.length}
                             </div>
                         </div>
                     </div>
 
                     {/* 固定按鈕 */}
-                    <div className="px-4 py-2 flex gap-2 border-t border-gray-100">
+                    <div className="px-4 py-2 flex gap-2 border-t border-slate-700/50">
                         <button
                             onClick={() => {
                                 setShowCommunication(!showCommunication);
@@ -1173,7 +1349,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors ${
                                 showCommunication
                                     ? 'bg-blue-600 text-white hover:bg-blue-700'
-                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                             }`}
                         >
                             <MessageSquare className="w-3 h-3" />
@@ -1187,7 +1363,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors ${
                                 showPTTControl
                                     ? 'bg-purple-600 text-white hover:bg-purple-700'
-                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                             }`}
                         >
                             <Radio className="w-3 h-3" />
@@ -1199,29 +1375,29 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                 {/* 主要內容區域 - 可滾動 */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {/* 連線狀態卡片 */}
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                    <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
                         <div className="grid grid-cols-3 gap-4">
                             <div>
-                                <div className="text-xs text-gray-600 mb-1">WebSocket 狀態</div>
+                                <div className="text-xs text-slate-400 mb-1">WebSocket 狀態</div>
                                 <div className="flex items-center gap-2">
-                                    <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                                    <span className="text-sm font-medium">{wsConnected ? '已連接' : '未連接'}</span>
+                                    <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                                    <span className="text-sm font-medium text-slate-200">{wsConnected ? '已連接' : '未連接'}</span>
                                 </div>
                             </div>
                             <div>
-                                <div className="text-xs text-gray-600 mb-1">連接設備</div>
-                                <span className="text-lg font-bold text-blue-600">{devices.length}</span>
+                                <div className="text-xs text-slate-400 mb-1">連接設備</div>
+                                <span className="text-lg font-bold text-blue-400">{devices.length}</span>
                             </div>
                             <div>
-                                <div className="text-xs text-gray-600 mb-1">PTT 頻道</div>
+                                <div className="text-xs text-slate-400 mb-1">PTT 頻道</div>
                                 <select
                                     value={pttChannel}
                                     onChange={(e) => setPttChannel(e.target.value)}
-                                    className="text-sm border border-gray-300 rounded px-2 py-1"
+                                    className="text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded px-2 py-1"
                                 >
                                     {pttChannels.map((channel) => (
                                         <option key={channel} value={channel}>
-                                            {channel === 'emergency' ? '🆘 緊急' :
+                                            {channel === 'emergency' ? '緊急' :
                                              channel.startsWith('channel') ? `頻道 ${channel.slice(-1)}` :
                                              channel}
                                         </option>
@@ -1233,9 +1409,9 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
                     {/* 通訊面板 */}
                     {showCommunication && (
-                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
-                            <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                                <MessageSquare className="w-4 h-4" />
+                        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50 space-y-3">
+                            <h3 className="font-bold text-slate-100 flex items-center gap-2">
+                                <MessageSquare className="w-4 h-4 text-blue-400" />
                                 通訊面板
                             </h3>
 
@@ -1243,9 +1419,9 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             <select
                                 value={selectedGroup}
                                 onChange={(e) => setSelectedGroup(e.target.value)}
-                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                                className="w-full px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded-lg"
                             >
-                                <option value="all">📢 全體廣播</option>
+                                <option value="all">全體廣播</option>
                                 {pttChannels.map((channel) => {
                                     const count = devices.filter(d => d.group === channel).length;
                                     return (
@@ -1257,9 +1433,9 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             </select>
 
                             {/* 訊息列表 */}
-                            <div className="bg-white rounded-lg p-3 min-h-32 space-y-2 border border-gray-200">
+                            <div className="bg-slate-900/50 rounded-lg p-3 min-h-32 space-y-2 border border-slate-700/50">
                                 {relevantMessages.length === 0 ? (
-                                    <div className="flex items-center justify-center py-8 text-gray-400">
+                                    <div className="flex items-center justify-center py-8 text-slate-500">
                                         <span className="text-sm">尚無訊息</span>
                                     </div>
                                 ) : (
@@ -1267,7 +1443,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                         // Check if message is from current user
                                         const isFromMe = msg.from === pttDeviceId || msg.from === 'COMMAND_CENTER';
                                         // Check if it's a voice message (has audioData or starts with voice emoji)
-                                        const isVoiceMessage = !!msg.audioData || msg.text.includes('💬') || msg.text.includes('🎙️');
+                                        const isVoiceMessage = !!msg.audioData || msg.text.includes('voice') || msg.text.includes('audio');
 
                                         return (
                                             <div
@@ -1278,7 +1454,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                                     className={`max-w-[80%] rounded-lg p-3 ${
                                                         isFromMe
                                                             ? 'bg-blue-600 text-white'
-                                                            : 'bg-white border border-gray-200'
+                                                            : 'bg-slate-700/50 border border-slate-600/50 text-slate-200'
                                                     }`}
                                                 >
                                                     <div className="flex items-center gap-2 mb-1">
@@ -1286,7 +1462,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                                             {msg.from}
                                                         </span>
                                                         {msg.to !== 'all' && (
-                                                            <span className={`text-xs ${isFromMe ? 'text-blue-200' : 'text-gray-500'}`}>
+                                                            <span className={`text-xs ${isFromMe ? 'text-blue-200' : 'text-slate-400'}`}>
                                                                 → {msg.to.replace('group:', '群組:').replace('device:', '')}
                                                             </span>
                                                         )}
@@ -1310,9 +1486,9 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
                                                                         try {
                                                                             await audio.play();
-                                                                            console.log('✅ Audio playing successfully');
+                                                                            console.log('[Audio] Playing successfully');
                                                                         } catch (playErr) {
-                                                                            console.warn('⚠️ Primary format failed, trying fallback...', playErr);
+                                                                            console.warn('[Audio] Primary format failed, trying fallback...', playErr);
                                                                             // 嘗試使用備用格式
                                                                             URL.revokeObjectURL(audioUrl);
                                                                             const fallbackBlob = new Blob([audioBytes], { type: 'audio/ogg;codecs=opus' });
@@ -1320,17 +1496,17 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                                                             const fallbackAudio = new Audio(fallbackUrl);
                                                                             fallbackAudio.onended = () => URL.revokeObjectURL(fallbackUrl);
                                                                             await fallbackAudio.play();
-                                                                            console.log('✅ Audio playing with fallback format');
+                                                                            console.log('[Audio] Playing with fallback format');
                                                                         }
                                                                     } catch (err) {
-                                                                        console.error('❌ Failed to play audio:', err);
+                                                                        console.error('[Audio] Failed to play:', err);
                                                                         alert('無法播放音訊，瀏覽器可能不支援此格式');
                                                                     }
                                                                 }}
                                                                 className={`flex items-center gap-1 text-sm px-2 py-1 rounded self-start ${
                                                                     isFromMe
                                                                         ? 'bg-blue-700 hover:bg-blue-800'
-                                                                        : 'bg-gray-100 hover:bg-gray-200'
+                                                                        : 'bg-slate-600 hover:bg-slate-500 text-slate-200'
                                                                 }`}
                                                             >
                                                                 <Mic className="w-3 h-3" />
@@ -1341,7 +1517,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                                         <p className="text-sm">{msg.text}</p>
                                                     )}
 
-                                                    <div className={`text-xs mt-1 ${isFromMe ? 'text-blue-200' : 'text-gray-500'}`}>
+                                                    <div className={`text-xs mt-1 ${isFromMe ? 'text-blue-200' : 'text-slate-500'}`}>
                                                         {formatMessageTime(msg.timestamp)}
                                                     </div>
                                                 </div>
@@ -1365,7 +1541,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                         }
                                     }}
                                     placeholder="輸入訊息..."
-                                    className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                                    className="flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-400 rounded-lg"
                                     disabled={isRecordingVoiceMsg}
                                 />
                                 {/* 語音訊息按鈕 */}
@@ -1374,7 +1550,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                                         isRecordingVoiceMsg
                                             ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
-                                            : 'bg-gray-600 hover:bg-gray-700 text-white'
+                                            : 'bg-slate-600 hover:bg-slate-500 text-white'
                                     }`}
                                     title={isRecordingVoiceMsg ? "停止錄音" : "錄製語音訊息"}
                                 >
@@ -1384,7 +1560,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                 <button
                                     onClick={handleSendMessage}
                                     disabled={!messageText.trim() || isRecordingVoiceMsg}
-                                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:text-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium"
                                     title="發送文字訊息"
                                 >
                                     <Send className="w-4 h-4" />
@@ -1397,11 +1573,11 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                     {showPTTControl && (
                         <>
                             <div className="space-y-3">
-                                <label className="block text-sm font-semibold text-gray-800">PTT 功能選擇</label>
+                                <label className="block text-sm font-semibold text-slate-200">PTT 功能選擇</label>
                                 <select
                                     value={selectedPTTFunction}
                                     onChange={(e) => setSelectedPTTFunction(e.target.value)}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg text-sm"
                                 >
                                     {pttFunctions.map((func) => (
                                         <option key={func.value} value={func.value}>
@@ -1414,19 +1590,19 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             {/* 狀態訊息 */}
                             {pttStatus && (
                                 <div className={`p-3 rounded-lg text-sm border ${
-                                    pttStatusType === 'success' ? 'bg-green-50 text-green-800 border-green-200' :
-                                    pttStatusType === 'error' ? 'bg-red-50 text-red-800 border-red-200' :
-                                    'bg-blue-50 text-blue-800 border-blue-200'
+                                    pttStatusType === 'success' ? 'bg-emerald-950/50 text-emerald-300 border-emerald-800/50' :
+                                    pttStatusType === 'error' ? 'bg-red-950/50 text-red-300 border-red-800/50' :
+                                    'bg-blue-950/50 text-blue-300 border-blue-800/50'
                                 }`}>
                                     {pttStatus}
                                 </div>
                             )}
 
                             {/* 當前用戶顯示 */}
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                <div className="text-xs text-gray-600 mb-1">當前 PTT 用戶</div>
-                                <div className="text-sm font-bold text-blue-900">{pttDeviceId}</div>
-                                <div className="text-xs text-gray-500 mt-1">
+                            <div className="bg-blue-950/50 border border-blue-800/50 rounded-lg p-3">
+                                <div className="text-xs text-slate-400 mb-1">當前 PTT 用戶</div>
+                                <div className="text-sm font-bold text-blue-300">{pttDeviceId}</div>
+                                <div className="text-xs text-slate-500 mt-1">
                                     {userName ? '登入用戶名稱' : '訪客模式（隨機 ID）'}
                                 </div>
                             </div>
@@ -1436,24 +1612,24 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
                             {/* 設備詳細資訊 */}
                             {selectedDevice && !selectedPTTFunction && (
-                                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
-                                    <h3 className="font-bold text-gray-800">{selectedDevice.callsign || selectedDevice.id}</h3>
+                                <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50 space-y-3">
+                                    <h3 className="font-bold text-slate-100">{selectedDevice.callsign || selectedDevice.id}</h3>
                                     <div className="grid grid-cols-2 gap-3 text-sm">
                                         <div>
-                                            <div className="text-gray-600">類型</div>
-                                            <div className="font-medium">{selectedDevice.type}</div>
+                                            <div className="text-slate-400">類型</div>
+                                            <div className="font-medium text-slate-200">{selectedDevice.type}</div>
                                         </div>
                                         <div>
-                                            <div className="text-gray-600">狀態</div>
-                                            <div className="font-medium text-green-600">{selectedDevice.status}</div>
+                                            <div className="text-slate-400">狀態</div>
+                                            <div className="font-medium text-emerald-400">{selectedDevice.status}</div>
                                         </div>
                                         <div>
-                                            <div className="text-gray-600">群組</div>
-                                            <div className="font-medium">{selectedDevice.group || '未分組'}</div>
+                                            <div className="text-slate-400">群組</div>
+                                            <div className="font-medium text-slate-200">{selectedDevice.group || '未分組'}</div>
                                         </div>
                                         <div>
-                                            <div className="text-gray-600">更新時間</div>
-                                            <div className="font-medium text-sm">{formatLastUpdate(selectedDevice.lastUpdate)}</div>
+                                            <div className="text-slate-400">更新時間</div>
+                                            <div className="font-medium text-sm text-slate-200">{formatLastUpdate(selectedDevice.lastUpdate)}</div>
                                         </div>
                                     </div>
                                 </div>

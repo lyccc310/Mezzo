@@ -1,3 +1,17 @@
+/**
+ * Mezzo 後端主伺服器
+ * =====================
+ * 功能：
+ * - PTT 語音通訊系統（執法儀語音對講）
+ * - 設備位置追蹤與管理
+ * - WebSocket 即時訊息推送
+ * - MQTT 訊息橋接
+ *
+ * 服務埠號：
+ * - HTTP API: 4000
+ * - WebSocket: 4001
+ */
+
 const express = require('express');
 const cors = require('cors');
 const { exec, spawn } = require('child_process');
@@ -10,18 +24,20 @@ const tls = require('tls');
 const net = require('net');
 
 const app = express();
-const HTTP_PORT = 4000;
-const WS_PORT = 4001;
-const HOST = '0.0.0.0';
 
-// ==================== 配置 ====================
+// ==================== 伺服器埠號配置 ====================
+const HTTP_PORT = 4000;  // HTTP REST API 服務埠號
+const WS_PORT = 4001;    // WebSocket 即時通訊埠號
+const HOST = '0.0.0.0';  // 監聽所有網路介面
+
+// ==================== 系統配置 ====================
 
 const SERVER_URL = '192.168.254.1';
 const PUBLIC_URL = `http://${SERVER_URL}:${HTTP_PORT}`;
 
-// TAK Server 配置
+// TAK Server 配置（暫時停用）
 const TAK_CONFIG = {
-  enabled: false,  // ← 暫時關閉 WinTAK
+  enabled: false,  // ← 暫時關閉 WinTAK 整合
   host: SERVER_URL,
   port: 8087,
   useTLS: false,
@@ -29,43 +45,28 @@ const TAK_CONFIG = {
   heartbeatInterval: 30000
 };
 
-// MQTT 配置 - 你們原有的
-const MQTT_CONFIG = {
-  broker: 'mqtt://test.mosquitto.org:1883',
-  topics: {
-    CAMERA_CONTROL: 'myapp/camera/control',
-    CAMERA_STATUS: 'myapp/camera/status',
-    CAMERA_GPS: 'myapp/camera/gps',
-    COT_MESSAGE: 'myapp/cot/message',
-    DEVICE_STATUS: 'myapp/device/+/status',
-    STREAM_CONTROL: 'myapp/stream/control',
-    MESSAGE_BROADCAST: 'myapp/messages/broadcast',
-    MESSAGE_GROUP: 'myapp/messages/group/+',
-    MESSAGE_DEVICE: 'myapp/messages/device/+'
-  },
-  options: {
-    clientId: `mezzo-server-${Date.now()}`,
-    clean: true,
-    reconnectPeriod: 5000,
-    connectTimeout: 30000
-  }
-};
-
-// ===== 新增：PTT MQTT 配置 =====
+// ==================== PTT MQTT 配置 ====================
+// 用於執法儀 PTT 語音系統的 MQTT 通訊
 const PTT_MQTT_CONFIG = {
-  broker: 'mqtt://118.163.141.80:1883',  // PTT 系統的 Broker
+  broker: 'mqtt://118.163.141.80:1883',  // PTT 執法儀 MQTT Broker 位址
   topics: {
-    ALL: '/WJI/PTT/#'  // 訂閱所有 PTT 主題
+    ALL: '/WJI/PTT/#'  // 訂閱所有 PTT 主題（萬用字元 # 表示所有子主題）
+    // 實際 Topic 範例：
+    // - /WJI/PTT/channel1/GPS           - GPS 位置更新
+    // - /WJI/PTT/channel1/SPEECH        - 群組語音音訊
+    // - /WJI/PTT/channel1/PRIVATE/UUID  - 私人語音音訊
+    // - /WJI/PTT/channel1/SOS           - 緊急求救訊號
+    // - /WJI/PTT/channel1/CHANNEL_ANNOUNCE - 頻道廣播訊息
   },
   options: {
-    clientId: `mezzo-ptt-bridge-${Date.now()}`,
-    clean: true,
-    reconnectPeriod: 5000,
-    connectTimeout: 30000
+    clientId: `mezzo-ptt-bridge-${Date.now()}`,  // 客戶端 ID（使用時間戳確保唯一性）
+    clean: true,              // 清除 session（重新連接不保留訂閱）
+    reconnectPeriod: 5000,    // 自動重連間隔（毫秒）
+    connectTimeout: 30000     // 連接超時（毫秒）
   }
 };
 
-// RTSP/影像配置
+// ==================== RTSP 影像串流配置 ====================
 const STREAM_CONFIG = {
   enabled: true,
   outputDir: path.join(__dirname, 'streams'),
@@ -80,36 +81,42 @@ const STREAM_CONFIG = {
   maxStreams: 10,
   streamTimeout: 300000
 };
-// ==================== 儲存 ====================
-const connectedDevices = new Map();
-const cotMessages = [];
-const rtspStreams = new Map();
-const rtspProcesses = new Map();
-const streamActivity = new Map();
-const messages = [];
-const deviceGroups = new Map();
-const streamsPath = path.resolve(__dirname, 'streams');
-// 確保 streams 目錄存在
-if (STREAM_CONFIG.enabled && !fs.existsSync(STREAM_CONFIG.outputDir)) {
-  fs.mkdirSync(STREAM_CONFIG.outputDir, { recursive: true });
-  console.log('📁 Created streams directory:', STREAM_CONFIG.outputDir);
-}
 
-// ===== 新增：PTT 狀態管理 =====
+// ==================== 資料儲存（記憶體） ====================
+
+// 設備與群組管理
+const connectedDevices = new Map();  // 設備 ID → 設備物件（位置、狀態、群組等）
+const deviceGroups = new Map();      // 群組名稱 → Set<設備 ID>
+
+// TAK Server 相關
+const cotMessages = [];  // CoT 訊息歷史
+
+// 影像串流管理
+const rtspStreams = new Map();    // 串流 ID → 串流設定
+const rtspProcesses = new Map();  // 串流 ID → FFmpeg 進程
+const streamActivity = new Map(); // 串流 ID → 最後活動時間
+
+// 訊息系統
+const messages = [];  // 訊息歷史（最多保留 100 則）
+
+// ==================== PTT 狀態管理 ====================
 const pttState = {
-  activeUsers: new Map(),      // 活躍的 PTT 使用者
-  sosAlerts: new Map(),        // SOS 警報
-  channelUsers: new Map(),     // 各頻道的使用者
-  broadcastedTranscripts: new Set(),  // 追蹤已廣播的轉錄訊息 (避免重複)
-  deviceConnections: new Map(),  // 設備 ID → WebSocket 連線對應表（用於私人通話）
-  channelSpeakers: new Map()   // 頻道 ID → 當前說話者 UUID（搶麥機制）
+  activeUsers: new Map(),      // PTT 使用者 ID → { lastSeen, channel }
+  sosAlerts: new Map(),        // SOS 警報 ID → SOS 事件物件
+  channelUsers: new Map(),     // 頻道 ID → Set<使用者 ID>
+  broadcastedTranscripts: new Set(),  // 已廣播的語音轉錄訊息 ID（避免重複）
+  deviceConnections: new Map(),       // 設備 ID → WebSocket 連線（用於私人通話）
+  channelSpeakers: new Map()          // 頻道 ID → 當前發言者 UUID（搶麥機制）
 };
 
-// 確保 streams 目錄存在
+// ==================== 初始化 ====================
+
+// 確保影像串流輸出目錄存在
 if (STREAM_CONFIG.enabled && !fs.existsSync(STREAM_CONFIG.outputDir)) {
   fs.mkdirSync(STREAM_CONFIG.outputDir, { recursive: true });
   console.log('📁 Created streams directory:', STREAM_CONFIG.outputDir);
 }
+const streamsPath = path.resolve(__dirname, 'streams');
 // ==================== TAK Client（支援 SSL）====================
 
 class TAKClient {
@@ -443,27 +450,45 @@ function getDeviceGroup(deviceId) {
   return device?.group || '未分組';
 }
 
-// ==================== PTT 資料解析函數 ====================
+// ==================== PTT 訊息解析函數 ====================
 
 /**
  * 解析 PTT MQTT 訊息格式
- * 格式：[Tag (32 bytes)][UUID (128 bytes)][Data (Variable)]
+ *
+ * PTT 訊息使用固定的二進制格式：
+ * ┌──────────────┬───────────────┬─────────────┐
+ * │  Tag         │    UUID       │   Data      │
+ * │  (32 bytes)  │  (128 bytes)  │ (Variable)  │
+ * └──────────────┴───────────────┴─────────────┘
+ *
+ * @param {Buffer} buffer - MQTT 訊息的 Binary Buffer
+ * @returns {Object|null} { tag, uuid, data } 或 null（如果解析失敗）
+ *
+ * Tag 類型範例：
+ * - "GPS"          - GPS 位置更新
+ * - "SOS"          - 緊急求救
+ * - "SPEECH_AUDIO" - 群組語音音訊
+ * - "PRIVATE_AUDIO" - 私人語音音訊
+ * - "BROADCAST"    - 廣播訊息
+ *
+ * UUID: 發送者的設備 ID
+ * Data: 根據 Tag 類型而異的資料內容
  */
 function parsePTTMessage(buffer) {
   try {
-    // 確保 buffer 至少有 160 bytes (32 + 128)
+    // 確保 buffer 至少有 160 bytes (Tag: 32 + UUID: 128)
     if (buffer.length < 160) {
       console.warn('⚠️ PTT message too short:', buffer.length);
       return null;
     }
 
-    // 解析 Tag (前 32 bytes)
+    // 解析 Tag (前 32 bytes) - 訊息類型標識
     const tag = buffer.slice(0, 32).toString('utf8').trim().replace(/\0/g, '');
 
-    // 解析 UUID (接下來 128 bytes)
+    // 解析 UUID (32-160 bytes) - 發送者設備 ID
     const uuid = buffer.slice(32, 160).toString('utf8').trim().replace(/\0/g, '');
 
-    // 解析 Data (剩餘部分)
+    // 解析 Data (160 bytes 之後) - 實際資料內容
     const data = buffer.slice(160).toString('utf8').trim();
 
     return { tag, uuid, data };
@@ -474,22 +499,36 @@ function parsePTTMessage(buffer) {
 }
 
 /**
- * 處理 PTT GPS 訊息
+ * 處理 PTT GPS 位置訊息
+ *
+ * Topic: /WJI/PTT/{Channel}/GPS
+ * Data 格式: "UUID,Lat,Lon" 或 "Lat,Lon"
+ *
+ * 功能：
+ * 1. 解析 GPS 座標
+ * 2. 建立或更新設備位置資訊
+ * 3. 透過 WebSocket 廣播給所有前端客戶端
+ *
+ * @param {string} channel - PTT 頻道名稱（如 "channel1"）
+ * @param {string} uuid - 設備 ID（執法儀或使用者 ID）
+ * @param {string} data - GPS 資料字串
  */
 function handlePTT_GPS(channel, uuid, data) {
   try {
     console.log('📍 [PTT GPS]', { channel, uuid, data });
 
-    // 解析 GPS 資料：格式 "UUID,Lat,Lon" 或 "Lat,Lon"
+    // 解析 GPS 資料：支援兩種格式
+    // 格式 1: "UUID,Lat,Lon" - 包含 UUID 的完整格式
+    // 格式 2: "Lat,Lon"      - 簡化格式
     const parts = data.split(',');
     let lat, lon;
 
     if (parts.length >= 3) {
-      // 格式：UUID,Lat,Lon
+      // 格式 1：UUID,Lat,Lon
       lat = parseFloat(parts[1]);
       lon = parseFloat(parts[2]);
     } else if (parts.length >= 2) {
-      // 格式：Lat,Lon
+      // 格式 2：Lat,Lon
       lat = parseFloat(parts[0]);
       lon = parseFloat(parts[1]);
     } else {
@@ -497,32 +536,37 @@ function handlePTT_GPS(channel, uuid, data) {
       return;
     }
 
+    // 驗證座標有效性
     if (isNaN(lat) || isNaN(lon)) {
       console.warn('⚠️ Invalid GPS coordinates:', { lat, lon });
       return;
     }
 
-    // 建立設備物件
+    // 建立或更新設備物件
     const device = {
-      id: uuid,
-      type: 'ptt_user',
-      position: { lat, lng: lon, alt: 0 },
-      callsign: uuid.substring(0, 20),  // 取前 20 個字元作為 callsign
-      group: channel || 'PTT',
-      status: 'active',
-      source: 'ptt_gps',
-      priority: 3,
-      lastUpdate: new Date().toISOString()
+      id: uuid,                          // 設備唯一 ID
+      type: 'ptt_user',                  // 設備類型：PTT 使用者
+      position: { lat, lng: lon, alt: 0 },  // 位置（經緯度、高度）
+      callsign: uuid.substring(0, 20),   // 顯示名稱（截取前 20 字元）
+      group: channel || 'PTT',           // 所屬群組（預設為 PTT）
+      status: 'active',                  // 設備狀態
+      source: 'ptt_gps',                 // 資料來源標記
+      priority: 3,                       // 優先級（1-4，3 為一般）
+      lastUpdate: new Date().toISOString()  // 最後更新時間
     };
 
-    // 存入記憶體
-    connectedDevices.set(uuid, device);
-    updateGroupIndex(uuid, device.group);
-    pttState.activeUsers.set(uuid, { lastSeen: Date.now(), channel });
+    // 存入記憶體儲存
+    connectedDevices.set(uuid, device);           // 設備列表
+    updateGroupIndex(uuid, device.group);         // 群組索引
+    pttState.activeUsers.set(uuid, {              // PTT 活躍使用者
+      lastSeen: Date.now(),
+      channel
+    });
 
     console.log(`✅ PTT GPS updated: ${uuid} at ${lat}, ${lon}`);
 
-    // 廣播到前端
+    // 透過 WebSocket 廣播給所有連線的前端客戶端
+    // 前端會在地圖上顯示/更新該設備的位置標記
     broadcastToClients({
       type: 'device_update',
       device: device
@@ -719,7 +763,21 @@ function handlePTT_MARK(channel, uuid, tag, data) {
 }
 
 /**
- * 處理 PTT SPEECH (群組語音)
+ * 處理 PTT 群組語音音訊
+ *
+ * Topic: /WJI/PTT/{Channel}/SPEECH
+ * Data: Binary 音訊資料（WebM Opus 或 OGG Opus 格式）
+ *
+ * 功能：
+ * 1. 接收執法儀發送的群組語音音訊
+ * 2. 將音訊編碼為 Base64
+ * 3. 透過 WebSocket 廣播給該頻道的所有前端客戶端
+ * 4. 前端自動播放音訊（遠端監聽）
+ *
+ * @param {string} channel - PTT 頻道名稱
+ * @param {string} uuid - 發送者設備 ID
+ * @param {string} tag - 訊息標籤（如 "SPEECH_AUDIO"）
+ * @param {Buffer} audioBuffer - 原始音訊資料 Buffer
  */
 function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
   try {
@@ -730,28 +788,31 @@ function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
       audioSize: audioBuffer.length
     });
 
-    // 建立音訊數據的 base64
+    // 將音訊 Binary 資料轉換為 Base64 字串
+    // 方便透過 JSON WebSocket 傳輸
     const audioData = audioBuffer.toString('base64');
 
-    // 檢查是否已經廣播過（作為 transcript）
+    // 去重檢查：避免重複廣播同一段音訊
+    // 使用音訊的前 50 個字元作為指紋
     const messageKey = `${uuid}-${audioData.substring(0, 50)}`;
     if (pttState.broadcastedTranscripts.has(messageKey)) {
       console.log(`⏭️ Skipping duplicate broadcast (already sent as transcript): ${uuid}`);
       return;
     }
 
-    // 建立音訊封包事件
+    // 建立音訊封包事件物件
     const audioPacket = {
-      id: `speech-${uuid}-${Date.now()}`,
-      type: 'speech',
-      channel: channel,
-      from: uuid,
-      timestamp: new Date().toISOString(),
-      audioData: audioData,
-      tag: tag
+      id: `speech-${uuid}-${Date.now()}`,  // 唯一識別碼
+      type: 'speech',                       // 類型：群組語音
+      channel: channel,                     // 頻道名稱
+      from: uuid,                           // 發送者 ID
+      timestamp: new Date().toISOString(),  // 時間戳記
+      audioData: audioData,                 // Base64 編碼的音訊
+      tag: tag                              // 原始訊息標籤
     };
 
-    // 廣播到所有連接的客戶端（群組語音）
+    // 透過 WebSocket 廣播給所有連線的前端客戶端
+    // 前端 GPSTracking.tsx 會接收並播放音訊（遠端監聽功能）
     broadcastToClients({
       type: 'ptt_audio',
       packet: audioPacket
