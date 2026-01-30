@@ -1380,7 +1380,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {/* 連線狀態卡片 */}
                     <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className={`grid ${showCommunication ? 'grid-cols-2' : 'grid-cols-3'} gap-4`}>
                             <div>
                                 <div className="text-xs text-slate-400 mb-1">WebSocket 狀態</div>
                                 <div className="flex items-center gap-2">
@@ -1392,22 +1392,24 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                 <div className="text-xs text-slate-400 mb-1">連接設備</div>
                                 <span className="text-lg font-bold text-blue-400">{devices.length}</span>
                             </div>
-                            <div>
-                                <div className="text-xs text-slate-400 mb-1">PTT 頻道</div>
-                                <select
-                                    value={pttChannel}
-                                    onChange={(e) => setPttChannel(e.target.value)}
-                                    className="text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded px-2 py-1"
-                                >
-                                    {pttChannels.map((channel) => (
-                                        <option key={channel} value={channel}>
-                                            {channel === 'emergency' ? '緊急' :
-                                             channel.startsWith('channel') ? `頻道 ${channel.slice(-1)}` :
-                                             channel}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
+                            {!showCommunication && (
+                                <div>
+                                    <div className="text-xs text-slate-400 mb-1">PTT 頻道</div>
+                                    <select
+                                        value={pttChannel}
+                                        onChange={(e) => setPttChannel(e.target.value)}
+                                        className="text-sm bg-slate-700 border border-slate-600 text-slate-200 rounded px-2 py-1"
+                                    >
+                                        {pttChannels.map((channel) => (
+                                            <option key={channel} value={channel}>
+                                                {channel === 'emergency' ? '緊急' :
+                                                 channel.startsWith('channel') ? `頻道 ${channel.slice(-1)}` :
+                                                 channel}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                         </div>
                     </div>
 
