@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+"""
+⚠️ 已棄用 (DEPRECATED)
+=====================
+此腳本使用舊版 MQTT 配置 (test.mosquitto.org + myapp/* topics)
+已不再被 server.cjs 使用。
+
+新的 PTT 執法儀系統使用：
+- Broker: 118.163.141.80:1688
+- Topics: /WJI/PTT/{Channel}/*
+
+如需測試 PTT 功能，請使用前端 GPSTracking.tsx 的 PTT 控制面板
+或直接呼叫 /ptt/publish API。
+"""
+
 import sys
 import json
 import time
@@ -7,12 +21,13 @@ import random
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
-# ==================== 配置（與 server.cjs 一致）====================
-MQTT_BROKER = "test.mosquitto.org"  # 改成跟 server.cjs 一樣
+# ==================== 舊版配置（已棄用）====================
+# 注意：此配置已不再與 server.cjs 同步
+MQTT_BROKER = "test.mosquitto.org"  # 舊版 Broker
 MQTT_PORT = 1883
 MQTT_KEEPALIVE = 60
 
-# Topics（與 server.cjs 一致）
+# 舊版 Topics（已棄用）
 TOPIC_PREFIX = "myapp"
 TOPIC_CAMERA_CONTROL = f"{TOPIC_PREFIX}/camera/control"
 TOPIC_CAMERA_STATUS = f"{TOPIC_PREFIX}/camera/status"

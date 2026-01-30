@@ -48,7 +48,7 @@ Mezzo 是一個基於 React + Vite 的 PTT (Push-to-Talk) 即時通訊系統，�
 
 ```
 前端 (React)                 後端 (Node.js)              PTT MQTT Broker
-    │                            │                         (118.163.141.80:1883)
+    │                            │                         (118.163.141.80:1688)
     │ WebSocket                  │ MQTT Subscribe          │
     ├──────────────────────────> │ <──────────────────────┤
     │                            │                         │
@@ -501,7 +501,7 @@ if (pttState.broadcastedTranscripts.has(messageKey)) {
 ```json
 {
   "connected": true,
-  "broker": "mqtt://118.163.141.80:1883",
+  "broker": "mqtt://118.163.141.80:1688",
   "activeUsers": 5,
   "sosAlerts": 0,
   "channels": ["channel1", "channel2", "emergency"]
@@ -683,7 +683,7 @@ if (pttState.broadcastedTranscripts.has(messageKey)) {
 **症狀**: 無法發送訊息，後端日誌顯示 MQTT 錯誤
 
 **解決方案**:
-1. 確認 MQTT Broker 可訪問 (118.163.141.80:1883)
+1. 確認 MQTT Broker 可訪問 (118.163.141.80:1688)
 2. 檢查防火牆設定
 3. 確認網路環境允許 MQTT 連接
 4. 查看後端日誌詳細錯誤
@@ -715,7 +715,7 @@ node server.cjs
 **服務端口**:
 - HTTP: 4000
 - WebSocket: 4000
-- MQTT: 連接到 118.163.141.80:1883
+- MQTT: 連接到 118.163.141.80:1688
 
 ### 專案結構
 
@@ -866,7 +866,7 @@ services:
     ports:
       - "4000:4000"
     environment:
-      - MQTT_BROKER=118.163.141.80:1883
+      - MQTT_BROKER=118.163.141.80:1688
 ```
 
 ---

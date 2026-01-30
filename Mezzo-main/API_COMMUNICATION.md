@@ -45,7 +45,7 @@
            ▼
   ┌────────────────────┐
   │   MQTT Broker      │
-  │ 118.163.141.80:1883│  ← PTT 執法儀 MQTT 主機
+  │ 118.163.141.80:1688│  ← PTT 執法儀 MQTT 主機
   └────────────────────┘
 ```
 
@@ -218,7 +218,7 @@ http://localhost:4000
 ```json
 {
   "connected": true,
-  "broker": "mqtt://118.163.141.80:1883",
+  "broker": "mqtt://118.163.141.80:1688",
   "activeUsers": 5,
   "sosAlerts": 0
 }
@@ -704,7 +704,7 @@ useEffect(() => {
 4. 前端 `GPSTracking.tsx` 接收並播放音訊
 
 **測試要點**：
-- 確認 MQTT Broker 連接正常 (`118.163.141.80:1883`)
+- 確認 MQTT Broker 連接正常 (`118.163.141.80:1688`)
 - 檢查音訊格式是否支援 (WebM Opus 或 OGG Opus)
 - 驗證音訊 base64 編碼/解碼正確
 
@@ -762,7 +762,7 @@ Data: "UUID,Lat,Lon"
 ### Q1: MQTT 連接失敗
 
 **檢查**：
-- MQTT Broker 是否可達：`118.163.141.80:1883`
+- MQTT Broker 是否可達：`118.163.141.80:1688`
 - 防火牆是否阻擋 MQTT 連接
 - 後端 `server.cjs` 的 MQTT 配置是否正確
 

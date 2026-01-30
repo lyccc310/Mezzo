@@ -73,9 +73,13 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     );
 
     // ===== 提取 PTT 頻道列表 (包含固定頻道和動態群組) =====
+    // 注意：BWC 模擬器使用 CHANNEL0001 格式，需要保持一致
     const pttChannels = Array.from(
         new Set([
-            'channel1',
+            'CHANNEL0001',  // BWC 模擬器預設頻道
+            'CHANNEL0002',
+            'CHANNEL0003',
+            'channel1',     // 舊格式頻道（保留相容性）
             'channel2',
             'channel3',
             'emergency',

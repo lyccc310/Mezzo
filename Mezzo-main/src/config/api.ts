@@ -22,8 +22,10 @@ export const API_ENDPOINTS = {
   devices: `${API_BASE_URL}/devices`,
   streams: `${API_BASE_URL}/api/streams`,
   rtspRegister: `${API_BASE_URL}/api/rtsp/register`,
-  sendCot: `${API_BASE_URL}/send-cot`,
+  // sendCot: `${API_BASE_URL}/send-cot`,  // 已棄用：TAK Server 已停用
   takStatus: `${API_BASE_URL}/api/tak/status`,
+  // PTT API 端點
+  pttPublish: `${API_BASE_URL}/ptt/publish`,
 };
 
 // WebSocket URL

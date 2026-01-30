@@ -45,18 +45,26 @@ const TAK_CONFIG = {
   heartbeatInterval: 30000
 };
 
-// ==================== PTT MQTT 配置 ====================
-// 用於執法儀 PTT 語音系統的 MQTT 通訊
+// ==================== 舊版 MQTT 配置（已移除） ====================
+// 注意：原有的 mezzo/* topics 已被 PTT MQTT 取代
+// - mezzo/camera/gps → /WJI/PTT/{Channel}/GPS
+// - mezzo/camera/control → 未使用
+// - mezzo/camera/status → 未使用
+// - mezzo/cot/message → TAK 已停用
+// - mezzo/device/+/status → 未使用
+
+// ==================== PTT MQTT 配置（執法儀專用） ====================
+// 注意：此 Broker 專門用於執法儀 PTT 語音系統
 const PTT_MQTT_CONFIG = {
-  broker: 'mqtt://118.163.141.80:1883',  // PTT 執法儀 MQTT Broker 位址
+  broker: 'mqtt://118.163.141.80:1688',  // PTT 執法儀 MQTT Broker 位址
   topics: {
     ALL: '/WJI/PTT/#'  // 訂閱所有 PTT 主題（萬用字元 # 表示所有子主題）
     // 實際 Topic 範例：
-    // - /WJI/PTT/channel1/GPS           - GPS 位置更新
-    // - /WJI/PTT/channel1/SPEECH        - 群組語音音訊
-    // - /WJI/PTT/channel1/PRIVATE/UUID  - 私人語音音訊
-    // - /WJI/PTT/channel1/SOS           - 緊急求救訊號
-    // - /WJI/PTT/channel1/CHANNEL_ANNOUNCE - 頻道廣播訊息
+    // - /WJI/PTT/CHANNEL0001/GPS             - GPS 位置更新
+    // - /WJI/PTT/CHANNEL0001/SPEECH          - 群組語音音訊
+    // - /WJI/PTT/CHANNEL0001/PRIVATE/UUID    - 私人語音音訊
+    // - /WJI/PTT/CHANNEL0001/SOS             - 緊急求救訊號
+    // - /WJI/PTT/CHANNEL0001/CHANNEL_ANNOUNCE - 頻道廣播訊息
   },
   options: {
     clientId: `mezzo-ptt-bridge-${Date.now()}`,  // 客戶端 ID（使用時間戳確保唯一性）
@@ -1140,6 +1148,57 @@ function handlePTT_SpeechStop(channel, uuid, data) {
   }
 }
 
+/**
+ * 處理 PTT 群組仲裁允許說話
+ * Tag: PTT_MSG_TYPE_SPEECH_START_ALLOW
+ *
+ * BWC 模擬器用於允許指定 UUID 在群組中說話
+ *
+ * @param {string} channel - 頻道名稱
+ * @param {string} uuid - 發送者 UUID
+ * @param {string} data - 被允許說話的 UUID
+ */
+function handlePTT_SpeechAllow(channel, uuid, data) {
+  try {
+    const allowedUUID = data.trim() || uuid;
+
+    console.log('✅ [PTT_MSG_TYPE_SPEECH_START_ALLOW]', {
+      channel: channel,
+      allowedBy: uuid,
+      allowedUUID: allowedUUID
+    });
+
+    // 設置允許說話的使用者為當前發言者
+    pttState.channelSpeakers.set(channel, allowedUUID);
+
+    // 通知被允許的使用者
+    const allowedWs = pttState.deviceConnections.get(allowedUUID);
+    if (allowedWs && allowedWs.readyState === 1) { // WebSocket.OPEN = 1
+      allowedWs.send(JSON.stringify({
+        type: 'ptt_speech_allow',
+        channel: channel,
+        allowedBy: uuid,
+        timestamp: new Date().toISOString()
+      }));
+    }
+
+    // 廣播給所有人：誰被允許說話
+    broadcastToClients({
+      type: 'ptt_speaker_update',
+      channel: channel,
+      speaker: allowedUUID,
+      action: 'allow',
+      allowedBy: uuid,
+      timestamp: new Date().toISOString()
+    });
+
+    console.log(`✅ Speech allowed: ${allowedUUID} on channel ${channel} (by ${uuid})`);
+
+  } catch (error) {
+    console.error('❌ PTT SPEECH_ALLOW handler error:', error);
+  }
+}
+
 // ==================== RTSP 串流管理器 ====================
 
 class StreamManager {
@@ -1317,58 +1376,9 @@ if (STREAM_CONFIG.enabled) {
   }, 60000);
 }
 
-// ==================== MQTT 客戶端 ====================
-
-// ==================== MQTT 客戶端 (你們原有的) ====================
-
-const mqttClient = mqtt.connect(MQTT_CONFIG.broker, MQTT_CONFIG.options);
-
-mqttClient.on('connect', () => {
-  console.log('✅ Connected to MQTT Broker (Mezzo)');
-
-  Object.values(MQTT_CONFIG.topics).forEach(topic => {
-    mqttClient.subscribe(topic, (err) => {
-      if (!err) {
-        console.log(`📡 Subscribed: ${topic}`);
-      } else {
-        console.error(`❌ Subscribe failed: ${topic}`, err);
-      }
-    });
-  });
-});
-
-mqttClient.on('message', (topic, message) => {
-  const messageStr = message.toString();
-  console.log(`📨 MQTT [${topic}]:`, messageStr.substring(0, 100));
-
-  try {
-    if (topic === MQTT_CONFIG.topics.COT_MESSAGE) {
-      handleCotMessage(messageStr);
-    } else if (topic === MQTT_CONFIG.topics.CAMERA_GPS) {
-      handleGpsUpdate(messageStr);
-    } else if (topic === MQTT_CONFIG.topics.CAMERA_STATUS) {
-      handleCameraStatus(messageStr);
-    } else if (topic.includes('device/')) {
-      const deviceId = topic.split('/')[2];
-      handleDeviceStatus(deviceId, messageStr);
-    } else if (topic.includes('messages/')) {
-      handleIncomingMessage(messageStr, topic);
-    }
-
-    broadcastToClients({
-      type: 'mqtt_message',
-      topic: topic,
-      data: messageStr,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('❌ MQTT message error:', error);
-  }
-});
-
-mqttClient.on('error', (error) => {
-  console.error('❌ MQTT Error:', error.message);
-});
+// ==================== 舊版 MQTT 客戶端（已移除） ====================
+// 原有的 mqttClient 連接到 test.mosquitto.org 已被移除
+// 所有功能已整合到 PTT MQTT 客戶端 (pttMqttClient)
 
 // ==================== PTT MQTT 客戶端 (新增) ====================
 
@@ -1434,7 +1444,7 @@ pttMqttClient.on('message', (topic, message) => {
         break;
 
       case 'CHANNEL_ANNOUNCE':
-        // 根據 Tag 區分不同類型的廣播
+        // 根據 Tag 區分不同類型的廣播訊息
         if (tag === 'TEXT_MESSAGE') {
           handlePTT_TextMessage(channel, uuid, data);
         } else if (tag === 'BROADCAST') {
@@ -1443,18 +1453,18 @@ pttMqttClient.on('message', (topic, message) => {
           handlePTT_SpeechStart(channel, uuid, data);
         } else if (tag === 'PTT_MSG_TYPE_SPEECH_STOP') {
           handlePTT_SpeechStop(channel, uuid, data);
+        } else if (tag === 'PTT_MSG_TYPE_SPEECH_START_ALLOW') {
+          // BWC 模擬器：群組仲裁允許 UUID 說話
+          handlePTT_SpeechAllow(channel, uuid, data);
         } else if (tag === 'PTT_MSG_TYPE_MIC_RESPONSE') {
           handlePTT_MicResponse(channel, uuid, data);
-        } else if (tag.includes('PTT_MSG_TYPE_SPEECH')) {
-          console.log('🎙️ [PTT SPEECH CONTROL - UNHANDLED]', tag);
         } else if (tag === 'PRIVATE_SPK_REQ') {
           handlePTT_PrivateRequest(channel, uuid, data);
         } else if (tag === 'PRIVATE_SPK_STOP') {
           handlePTT_PrivateStop(channel, uuid, data);
-        } else if (tag.includes('PRIVATE_SPK')) {
-          console.log('📞 [PTT PRIVATE CALL CONTROL]', tag, data);
         } else {
           // 其他未知的 CHANNEL_ANNOUNCE 訊息
+          console.log(`📢 [CHANNEL_ANNOUNCE] Unknown tag: ${tag}`);
           handlePTT_Broadcast(channel, uuid, tag, data);
         }
         break;
@@ -1464,15 +1474,17 @@ pttMqttClient.on('message', (topic, message) => {
         break;
 
       case 'SPEECH':
+        // 群組語音音訊
         handlePTT_SPEECH(channel, uuid, tag, message.slice(160));
         break;
 
       case 'PRIVATE':
+        // 私人語音音訊
         handlePTT_PRIVATE(topic, channel, uuid, tag, message.slice(160));
         break;
 
       default:
-        console.log(`⚠️ Unknown PTT function: ${function_}`);
+        console.log(`⚠️ Unknown PTT function: ${function_}, tag: ${tag}`);
     }
 
   } catch (error) {
@@ -1633,22 +1645,8 @@ function handleWebSocketMessage(ws, data) {
       }
       break;
 
-    case 'send_command':
-      mqttClient.publish(
-        data.topic || MQTT_CONFIG.topics.CAMERA_CONTROL,
-        JSON.stringify(data.payload)
-      );
-      console.log(`📤 Command sent: ${data.payload?.action}`);
-      break;
-
-    case 'send_cot':
-      const cotXml = generateCotXml(data.payload);
-      if (takClient && TAK_CONFIG.enabled) {
-        takClient.sendCoT(cotXml);
-      } else {
-        mqttClient.publish(MQTT_CONFIG.topics.COT_MESSAGE, cotXml);
-      }
-      break;
+    // 已移除: send_command 和 send_cot（舊版 MQTT 功能）
+    // 如需攝影機控制，請使用 PTT 或其他 API
 
     case 'request_devices':
       const devices = getValidDevices();
@@ -1741,285 +1739,15 @@ function getValidDevices() {
     typeof device.position.lng === 'number'
   );
 }
-// ==================== 訊息處理函數 ====================
-
-function handleCotMessage(message) {
-  // 清理訊息
-  const cleanedMessage = message
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .trim();
-
-  if (cleanedMessage.length < 10 || !cleanedMessage.includes('<?xml')) {
-    return;
-  }
-
-  const parser = new xml2js.Parser({
-    explicitArray: false,
-    mergeAttrs: false,
-    trim: true,
-    normalize: true,
-    normalizeTags: false
-  });
-
-  parser.parseString(cleanedMessage, (err, result) => {
-    if (err) {
-      try {
-        const jsonData = JSON.parse(message);
-        processCotData(jsonData);
-      } catch (jsonErr) {
-        console.error('❌ CoT parse error:', err.message);
-        console.error('   Message preview:', cleanedMessage.substring(0, 100));
-      }
-    } else {
-      processCotData(result);
-    }
-  });
-}
-
-function processCotData(cotData) {
-  try {
-    const cotMessage = {
-      id: cotData.uid || cotData.id || Date.now().toString(),
-      timestamp: new Date().toISOString(),
-      data: cotData
-    };
-
-    cotMessages.push(cotMessage);
-    if (cotMessages.length > 100) {
-      cotMessages.shift();
-    }
-
-    if (cotData.point || cotData.location) {
-      updateDevicePosition(cotData);
-    }
-
-    broadcastToClients({
-      type: 'cot_update',
-      message: cotMessage
-    });
-  } catch (error) {
-    console.error('❌ Process CoT error:', error);
-  }
-}
-
-function handleGpsUpdate(message) {
-  try {
-    const gpsData = JSON.parse(message);
-
-    const lat = parseFloat(gpsData.latitude);
-    const lng = parseFloat(gpsData.longitude);
-
-    if (isNaN(lat) || isNaN(lng)) {
-      console.warn('⚠️  Invalid GPS data');
-      return;
-    }
-
-    const deviceId = gpsData.deviceId || 'unknown';
-    const existingDevice = connectedDevices.get(deviceId) || {};
-
-    const device = {
-      ...existingDevice,
-      id: deviceId,
-      type: existingDevice.type || gpsData.type || 'mobile',
-      position: {
-        lat: lat,
-        lng: lng,
-        alt: parseFloat(gpsData.altitude) || 0
-      },
-      callsign: gpsData.callsign || existingDevice.callsign || deviceId,
-      group: gpsData.group || existingDevice.group || '未分組',
-      lastUpdate: new Date().toISOString(),
-      status: 'active'
-    };
-
-    connectedDevices.set(deviceId, device);
-    updateGroupIndex(deviceId, device.group);
-
-    console.log(`📍 GPS updated for ${deviceId}: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-
-    if (takClient && TAK_CONFIG.enabled) {
-      const cotXml = generateDeviceCoT(device);
-      takClient.sendCoT(cotXml);
-    }
-
-    broadcastToClients({
-      type: 'device_update',
-      device: device
-    });
-  } catch (error) {
-    console.error('❌ GPS update error:', error);
-  }
-}
-
-function handleCameraStatus(message) {
-  try {
-    const statusData = JSON.parse(message);
-    const deviceId = statusData.deviceId || 'camera_1';
-
-    const existingDevice = connectedDevices.get(deviceId);
-
-    if (existingDevice) {
-      existingDevice.status = statusData.status || existingDevice.status;
-      existingDevice.battery = statusData.battery !== undefined ? parseInt(statusData.battery) : existingDevice.battery;
-      existingDevice.signal = statusData.signal !== undefined ? parseInt(statusData.signal) : existingDevice.signal;
-      existingDevice.lastUpdate = new Date().toISOString();
-      connectedDevices.set(deviceId, existingDevice);
-
-      console.log(`📊 Status updated for ${deviceId}`);
-
-      broadcastToClients({
-        type: 'device_update',
-        device: existingDevice
-      });
-    }
-  } catch (error) {
-    console.error('❌ Camera status error:', error);
-  }
-}
-
-function handleDeviceStatus(deviceId, message) {
-  try {
-    if (!message || message.length === 0) {
-      return;
-    }
-
-    let statusData;
-    try {
-      statusData = JSON.parse(message);
-    } catch (parseError) {
-      console.warn(`⚠️  Device ${deviceId} sent invalid JSON`);
-      return;
-    }
-
-    if (!statusData.position?.lat || !statusData.position?.lng) {
-      console.warn(`⚠️  Device ${deviceId} missing position`);
-      return;
-    }
-
-    const lat = parseFloat(statusData.position.lat);
-    const lng = parseFloat(statusData.position.lng);
-
-    if (isNaN(lat) || isNaN(lng)) {
-      console.warn(`⚠️  Device ${deviceId} invalid coordinates`);
-      return;
-    }
-
-    const device = {
-      id: deviceId,
-      type: statusData.type || 'unknown',
-      position: {
-        lat: lat,
-        lng: lng,
-        alt: parseFloat(statusData.position.alt) || 0
-      },
-      callsign: statusData.callsign || deviceId,
-      status: statusData.status || 'active',
-      battery: statusData.battery ? parseInt(statusData.battery) : undefined,
-      signal: statusData.signal ? parseInt(statusData.signal) : undefined,
-      priority: statusData.priority ? parseInt(statusData.priority) : 3,
-      group: statusData.group || '未分組',
-      streamUrl: statusData.streamUrl,
-      rtspUrl: statusData.rtspUrl,
-      lastUpdate: new Date().toISOString()
-    };
-
-    connectedDevices.set(deviceId, device);
-    updateGroupIndex(deviceId, device.group);
-
-    console.log(`📊 Device status updated: ${deviceId}`);
-
-    if (takClient && TAK_CONFIG.enabled) {
-      const cotXml = generateDeviceCoT(device);
-      takClient.sendCoT(cotXml);
-    }
-
-    broadcastToClients({
-      type: 'device_update',
-      device: device
-    });
-  } catch (error) {
-    console.error('❌ Device status error:', error);
-  }
-}
-
-function updateDevicePosition(cotData) {
-  try {
-    const deviceId = cotData.uid || cotData.callsign || 'unknown';
-    const point = cotData.point || {};
-
-    const lat = parseFloat(point.lat);
-    const lng = parseFloat(point.lon || point.lng);
-
-    if (isNaN(lat) || isNaN(lng)) {
-      console.warn('⚠️  CoT invalid coordinates');
-      return;
-    }
-
-    const device = {
-      id: deviceId,
-      type: cotData.type || 'unknown',
-      position: {
-        lat: lat,
-        lng: lng,
-        alt: parseFloat(point.hae || point.alt) || 0
-      },
-      callsign: cotData.callsign || deviceId,
-      lastUpdate: new Date().toISOString(),
-      status: 'active'
-    };
-
-    connectedDevices.set(deviceId, device);
-    console.log(`📍 Position updated for ${deviceId}: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-
-    broadcastToClients({
-      type: 'device_update',
-      device: device
-    });
-  } catch (error) {
-    console.error('❌ Update position error:', error);
-  }
-}
-
-// ===== 處理接收訊息 (MQTT) =====
-function handleIncomingMessage(messageStr, topic) {
-  try {
-    const incomingMsg = JSON.parse(messageStr);
-
-    console.log(`💬 Incoming message from MQTT:`, incomingMsg);
-
-    if (!incomingMsg.from || !incomingMsg.text) {
-      console.warn('⚠️  Invalid message format');
-      return;
-    }
-
-    const message = {
-      id: incomingMsg.id || `msg-${Date.now()}`,
-      from: incomingMsg.from,
-      to: incomingMsg.to || 'COMMAND_CENTER',
-      text: incomingMsg.text,
-      priority: incomingMsg.priority || 3,
-      timestamp: incomingMsg.timestamp || new Date().toISOString(),
-      source: 'mqtt',
-      topic: topic
-    };
-
-    messages.push(message);
-
-    if (messages.length > 100) {
-      messages.shift();
-    }
-
-    broadcastToClients({
-      type: 'message',
-      message: message,
-    });
-
-    console.log(`✅ Message stored and broadcasted: ${message.from} → ${message.to}`);
-  } catch (error) {
-    console.error('❌ Handle incoming message error:', error);
-  }
-}
+// ==================== 訊息處理函數（舊版 MQTT 已移除） ====================
+// 以下函數已移除（原用於 mezzo/* MQTT topics）：
+// - handleCotMessage    → TAK Server 已停用
+// - processCotData      → TAK Server 已停用
+// - handleGpsUpdate     → 改用 handlePTT_GPS
+// - handleCameraStatus  → 未使用
+// - handleDeviceStatus  → 未使用
+// - updateDevicePosition → TAK Server 已停用
+// - handleIncomingMessage → 舊版 MQTT 已移除
 
 // ==================== 驗證和清理函數 ====================
 
@@ -2141,7 +1869,6 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     mqtt: {
-      mezzo: mqttClient.connected,
       ptt: pttMqttClient.connected
     },
     devices: {
@@ -2384,10 +2111,11 @@ app.post('/send-cot', (req, res) => {
         method: 'tak_server'
       });
     } else {
-      mqttClient.publish(MQTT_CONFIG.topics.COT_MESSAGE, cotXml);
+      // TAK Server 已停用，舊版 MQTT 已移除
       res.json({
-        success: true,
-        method: 'mqtt'
+        success: false,
+        method: 'none',
+        message: 'TAK Server is disabled and legacy MQTT has been removed'
       });
     }
   } catch (error) {
@@ -2429,25 +2157,7 @@ app.post('/send-message', (req, res) => {
       message: message,
     });
 
-    if (mqttClient && mqttClient.connected) {
-      let topic = 'myapp/messages/broadcast';
-
-      if (to.startsWith('group:')) {
-        const groupName = to.replace('group:', '');
-        topic = `myapp/messages/group/${groupName}`;
-      } else if (to.startsWith('device:')) {
-        const deviceId = to.replace('device:', '');
-        topic = `myapp/messages/device/${deviceId}`;
-      }
-
-      mqttClient.publish(topic, JSON.stringify(message), (err) => {
-        if (err) {
-          console.error('❌ MQTT publish error:', err);
-        } else {
-          console.log(`📤 Message published to MQTT: ${topic}`);
-        }
-      });
-    }
+    // 舊版 MQTT 發布已移除，改用 WebSocket 廣播
 
     // ✅ 修正：使用 .connected 屬性而非 .isConnected()
     if (takClient && takClient.connected) {
@@ -2526,16 +2236,15 @@ app.post('/voice-message', (req, res) => {
   }
 
   if (command) {
-    mqttClient.publish(MQTT_CONFIG.topics.CAMERA_CONTROL, JSON.stringify({
-      action: command,
-      timestamp: new Date().toISOString()
-    }));
+    // 舊版 MQTT 攝影機控制已移除
+    console.log(`📹 Voice command recognized: ${command} (MQTT disabled)`);
 
-    try {
-      exec(`python mqtt_publish.py ${command}`);
-    } catch (error) {
-      console.error('Python script error:', error);
-    }
+    // 保留 Python 腳本執行（如有需要）
+    // try {
+    //   exec(`python mqtt_publish.py ${command}`);
+    // } catch (error) {
+    //   console.error('Python script error:', error);
+    // }
   }
 
   res.json({
@@ -2832,13 +2541,13 @@ app.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log('🚀 服務狀態:');
   console.log(`   HTTP Server:  http://0.0.0.0:${HTTP_PORT}`);
   console.log(`   WebSocket:    ws://0.0.0.0:${WS_PORT}`);
-  console.log(`   MQTT Broker:  ${MQTT_CONFIG.broker}`);
+  console.log(`   PTT MQTT:     ${PTT_MQTT_CONFIG.broker}`);
   console.log(`   TAK Server:   ${TAK_CONFIG.enabled ? `✅ ${TAK_CONFIG.host}:${TAK_CONFIG.port}` : '❌ Disabled'}`);
   console.log(`   RTSP Streams: ${STREAM_CONFIG.enabled ? '✅ Enabled' : '❌ Disabled'}`);
   console.log('');
   console.log('📋 功能:');
-  console.log('   ✅ ATAK 群組支援 (自動解析群組資訊)');
-  console.log('   ✅ 訊息系統 (MQTT + WebSocket + TAK Server)');
+  console.log('   ✅ PTT 執法儀語音對講');
+  console.log('   ✅ 訊息系統 (WebSocket)');
   console.log('   ✅ 群組訊息路由');
   console.log('   ✅ 設備群組管理');
   console.log('   ✅ RTSP 攝像頭註冊與串流');
@@ -2869,8 +2578,8 @@ function shutdown() {
     console.log('✅ WebSocket server closed');
   });
 
-  mqttClient.end(false, () => {
-    console.log('✅ MQTT client disconnected');
+  pttMqttClient.end(false, () => {
+    console.log('✅ PTT MQTT client disconnected');
   });
 
   if (takClient) {
