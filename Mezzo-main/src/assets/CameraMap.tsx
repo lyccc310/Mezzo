@@ -266,14 +266,105 @@ const CameraMap: React.FC<CameraMapProps> = ({
   wsStatus = 'disconnected',
   onDeviceSelect
 }) => {
+  const [localDevices, setLocalDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [showVideo, setShowVideo] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>([25.0338, 121.5646]);
   const [zoom, setZoom] = useState(13);
   const [priorityFilter, setPriorityFilter] = useState<number[]>([1, 2, 3, 4]);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  // 過濾並驗證設備數據
-  const devices = propsDevices.filter(device => {
+  // ===== WebSocket 連接 =====
+  useEffect(() => {
+    const connectWebSocket = () => {
+      const hostname = window.location.hostname;
+      const baseUrl = hostname === 'localhost' || hostname === '127.0.0.1' 
+        ? 'http://localhost:4000'
+        : `http://${hostname}:4000`;
+      const wsUrl = baseUrl.replace('http', 'ws').replace(':4000', ':4001');
+
+      console.log('[CameraMap] WebSocket connecting to:', wsUrl);
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('✅ [CameraMap] WebSocket connected, waiting for devices...');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          // 處理初始狀態（連接時發送）
+          if (data.type === 'initial_state' && data.devices) {
+            console.log(`📋 [CameraMap] Initial state - Devices: ${data.devices.length}`);
+            setLocalDevices(data.devices);
+          }
+
+          // 處理設備列表更新
+          if (data.type === 'devices_update' && data.devices) {
+            console.log(`📋 [CameraMap] Devices update: ${data.devices.length}`);
+            setLocalDevices(data.devices);
+          }
+
+          // 處理設備更新
+          if (data.type === 'device_update' && data.device) {
+            console.log(`📱 [CameraMap] Device update: ${data.device.id}`);
+            setLocalDevices((prev) => {
+              const index = prev.findIndex((d) => d.id === data.device.id);
+              if (index !== -1) {
+                const updated = [...prev];
+                updated[index] = data.device;
+                return updated;
+              } else {
+                return [...prev, data.device];
+              }
+            });
+          }
+
+          // 處理設備添加
+          if (data.type === 'device_added' && data.device) {
+            console.log(`➕ [CameraMap] Device added: ${data.device.id}`);
+            setLocalDevices((prev) => {
+              if (prev.find((d) => d.id === data.device.id)) {
+                return prev;
+              }
+              return [...prev, data.device];
+            });
+          }
+
+          // 處理設備移除
+          if (data.type === 'device_removed' && data.deviceId) {
+            console.log(`➖ [CameraMap] Device removed: ${data.deviceId}`);
+            setLocalDevices((prev) => prev.filter((d) => d.id !== data.deviceId));
+          }
+        } catch (error) {
+          console.error('[CameraMap] WebSocket message parse error:', error);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('❌ [CameraMap] WebSocket error:', error);
+      };
+
+      ws.onclose = () => {
+        console.log('⚠️ [CameraMap] WebSocket disconnected, reconnecting...');
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      wsRef.current = ws;
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
+
+  // 優先使用本地 WebSocket 數據，如果沒有就使用 props 中的數據
+  const devices = (localDevices.length > 0 ? localDevices : propsDevices).filter(device => {
     const isValid = isValidDevice(device);
     if (!isValid && device) {
       console.warn('⚠️ Invalid device filtered out:', device);

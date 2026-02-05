@@ -24,10 +24,9 @@ console.log('[GPSTracking] WebSocket:', WS_URL);
 
 interface GPSTrackingProps {
     userName?: string;
-    setDevices?: (devices: any[]) => void;
 }
 
-const GPSTracking: React.FC<GPSTrackingProps> = ({ userName, setDevices: setParentDevices }) => {
+const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
     const [devices, setDevices] = useState<Device[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
@@ -426,13 +425,6 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName, setDevices: setPare
 
         return () => clearInterval(intervalId);
     }, [autoLocationEnabled, gpsLat, gpsLon, pttChannel]);
-
-    // 同步 devices 到父組件 (Dashboard)
-    useEffect(() => {
-        if (setParentDevices) {
-            setParentDevices(devices);
-        }
-    }, [devices, setParentDevices]);
 
     // ===== 音訊發送函數 =====
     const handleAudioSend = async (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string, transcript?: string) => {

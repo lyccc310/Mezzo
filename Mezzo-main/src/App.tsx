@@ -124,7 +124,7 @@ const Sidebar = ({ activeMenu, onMenuChange }: { activeMenu: string; onMenuChang
   );
 };
 
-const Dashboard = ({ teamStatus, transcripts, onTranscript, devices, setActiveMenu }: { teamStatus: TeamMember[]; transcripts: Transcript[]; onTranscript: (t: Transcript) => void; devices: any[]; setActiveMenu: (menu: string) => void }) => {
+const Dashboard = ({ teamStatus, transcripts, onTranscript, setActiveMenu }: { teamStatus: TeamMember[]; transcripts: Transcript[]; onTranscript: (t: Transcript) => void; setActiveMenu: (menu: string) => void }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -476,7 +476,6 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript, devices, setActiveMe
         <div className="col-span-1">
           <div className="bg-white rounded-lg shadow-sm">
             <CameraMap
-              devices={devices}
               wsStatus="connected"
               onDeviceSelect={() => {}}
             />
@@ -538,7 +537,6 @@ export default function App() {
   const [userUnit, setUserUnit] = useState('');
   const [activeMenu, setActiveMenu] = useState('Dashboard');
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
-  const [devices, setDevices] = useState<any[]>([]);
   const [teamStatus, setTeamStatus] = useState<TeamMember[]>([
     { id: '1', name: 'Officer Rodriguez', unit: 'Patrol Unit 7A', status: 'Live', color: 'red' },
     { id: '2', name: 'Officer Santos', unit: 'Patrol Unit 5B', status: 'Active', color: 'green' },
@@ -593,7 +591,6 @@ export default function App() {
             teamStatus={teamStatus}
             transcripts={transcripts}
             onTranscript={handleTranscript}
-            devices={devices}
             setActiveMenu={setActiveMenu}
           />
         )}
@@ -608,7 +605,7 @@ export default function App() {
             />
           )}
 
-        {activeMenu === 'GPS Tracking' && <GPSTracking userName={userName} setDevices={setDevices} />}
+        {activeMenu === 'GPS Tracking' && <GPSTracking userName={userName} />}
 
         {activeMenu === 'Device Management' && <Device />}
 
