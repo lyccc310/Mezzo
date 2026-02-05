@@ -139,7 +139,7 @@ export default function Playback() {
         }
       }
 
-      const blob = new Blob(chunks);
+      const blob = new Blob(chunks as any);
       const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = downloadUrl;
@@ -252,14 +252,14 @@ export default function Playback() {
                     <div className="flex gap-2 flex-col min-w-[120px]">
                       <div className="flex gap-2">
                         <button
-                          onClick={() => downloadFile('avi', item.Tag, item.FileName)}
+                          onClick={() => downloadFile('avi', item.Tag ?? '', item.FileName ?? '')}
                           disabled={isDownloadingAvi || !item.Tag}
                           className="bg-green-600 disabled:bg-gray-300 text-white text-xs px-3 py-1 rounded hover:bg-green-700 flex-1"
                         >
                           {isDownloadingAvi ? 'Downloading...' : 'AVI'}
                         </button>
                         <button
-                          onClick={() => downloadFile('raw', item.Tag, item.FileName)}
+                          onClick={() => downloadFile('raw', item.Tag ?? '', item.FileName ?? '')}
                           disabled={isDownloadingRaw || !item.Tag}
                           className="bg-purple-600 disabled:bg-gray-300 text-white text-xs px-3 py-1 rounded hover:bg-purple-700 flex-1"
                         >
