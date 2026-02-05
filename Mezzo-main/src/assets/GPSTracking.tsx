@@ -24,9 +24,10 @@ console.log('[GPSTracking] WebSocket:', WS_URL);
 
 interface GPSTrackingProps {
     userName?: string;
+    setDevices?: (devices: any[]) => void;
 }
 
-const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
+const GPSTracking: React.FC<GPSTrackingProps> = ({ userName, setDevices: setParentDevices }) => {
     const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
     const [devices, setDevices] = useState<Device[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
@@ -426,6 +427,13 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
         return () => clearInterval(intervalId);
     }, [autoLocationEnabled, gpsLat, gpsLon, pttChannel]);
 
+    // 同步 devices 到父組件 (Dashboard)
+    useEffect(() => {
+        if (setParentDevices) {
+            setParentDevices(devices);
+        }
+    }, [devices, setParentDevices]);
+
     // ===== 音訊發送函數 =====
     const handleAudioSend = async (audioData: ArrayBuffer, isPrivate: boolean, targetId?: string, transcript?: string) => {
         try {
@@ -706,7 +714,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                         }
 
                         // 處理 PTT GPS 更新
-                        if (data.type === 'device_update' && data.device && data.device.source?.includes('ptt')) {
+                        if (data.type === 'device_update' && data.device && data.device.source === 'ptt_gps') {
                             const device = data.device;
                             // 過濾掉無效的 GPS 座標 (0,0) 避免洗版
                             const isValidGPS = device.position.lat !== 0 || device.position.lng !== 0;
