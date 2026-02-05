@@ -363,6 +363,7 @@ class TAKClient {
           position: { lat, lng, alt },
           callsign: callsign,
           status: 'active',
+          priority: 3,  // 預設優先級
           group: group,  // ← 群組資訊
           role: role,    // ← 角色資訊 (ATAK)
           lastUpdate: new Date().toISOString(),
@@ -385,7 +386,7 @@ class TAKClient {
         // 廣播到前端
         broadcastToClients({
           type: 'device_update',
-          device: device
+          device: cleanDeviceData(device)
         });
 
         // 同時廣播原始 TAK 訊息
@@ -577,7 +578,7 @@ function handlePTT_GPS(channel, uuid, data) {
     // 前端會在地圖上顯示/更新該設備的位置標記
     broadcastToClients({
       type: 'device_update',
-      device: device
+      device: cleanDeviceData(device)  // 使用 cleanDeviceData 確保格式正確
     });
 
   } catch (error) {
@@ -642,7 +643,7 @@ function handlePTT_SOS(channel, uuid, data) {
     // 也廣播設備更新
     broadcastToClients({
       type: 'device_update',
-      device: sosEvent
+      device: cleanDeviceData(sosEvent)
     });
 
   } catch (error) {
@@ -744,7 +745,7 @@ function handlePTT_MARK(channel, uuid, tag, data) {
 
       broadcastToClients({
         type: 'device_update',
-        device: device
+        device: cleanDeviceData(device)
       });
     }
 
@@ -2041,7 +2042,7 @@ app.post('/api/rtsp/register', (req, res) => {
 
     broadcastToClients({
       type: 'device_added',
-      device: device
+      device: cleanDeviceData(device)
     });
 
     res.json({
