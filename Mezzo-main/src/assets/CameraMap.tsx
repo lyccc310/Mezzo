@@ -272,10 +272,26 @@ const CameraMap: React.FC<CameraMapProps> = ({
   const [zoom, setZoom] = useState(13);
   const [priorityFilter, setPriorityFilter] = useState<number[]>([1, 2, 3, 4]);
 
-  const devices = propsDevices.filter(isValidDevice).map(device => ({
+  // 過濾並驗證設備數據
+  const devices = propsDevices.filter(device => {
+    const isValid = isValidDevice(device);
+    if (!isValid && device) {
+      console.warn('⚠️ Invalid device filtered out:', device);
+    }
+    return isValid;
+  }).map(device => ({
     ...device,
     lastUpdate: device.lastUpdate || new Date().toISOString()
   }));
+
+  // 調試日誌：顯示收到的設備數量和過濾結果
+  useEffect(() => {
+    console.log(`🗺️ [CameraMap] Devices update:`, {
+      received: propsDevices.length,
+      valid: devices.length,
+      devices: devices.map(d => ({ id: d.id, lat: d.position?.lat, lng: d.position?.lng }))
+    });
+  }, [devices.length]);
 
   useEffect(() => {
     if (devices.length > 0 && !selectedDevice) {
@@ -433,7 +449,12 @@ const CameraMap: React.FC<CameraMapProps> = ({
           />
 
           {sortedDevices.map((device) => {
-            if (!device.position || !device.position.lat || !device.position.lng) return null;
+            if (!device.position || !device.position.lat || !device.position.lng) {
+              console.warn('⚠️ Device missing position:', device.id);
+              return null;
+            }
+
+            console.log(`📌 Rendering marker for device: ${device.id} at [${device.position.lat}, ${device.position.lng}]`);
 
             return (
               <div key={device.id}>
@@ -444,6 +465,7 @@ const CameraMap: React.FC<CameraMapProps> = ({
                     getPriorityColor(device.priority || 3),
                     device.priority
                   )}
+                  title={device.callsign || device.id}
                   eventHandlers={{
                     click: () => {
                       setSelectedDevice(device.id);
