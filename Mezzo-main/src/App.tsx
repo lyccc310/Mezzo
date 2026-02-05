@@ -476,8 +476,9 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript, setActiveMenu }: { t
         <div className="col-span-1">
           <div className="bg-white rounded-lg shadow-sm">
             <CameraMap
+              devices={[]}
               wsStatus="connected"
-              onDeviceSelect={() => {}}
+              onDeviceSelect={(device) => {}}
             />
           </div>
           {/* Team Status */}

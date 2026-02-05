@@ -670,7 +670,9 @@ const CameraMap: React.FC<CameraMapProps> = ({
                         className="p-1.5 rounded-md"
                         style={{ backgroundColor: `${getPriorityColor(device.priority || 3)}20` }}
                       >
-                        <DeviceIcon type={device.type || 'unknown'} className="w-4 h-4" style={{ color: getPriorityColor(device.priority || 3) }} />
+                        <div style={{ color: getPriorityColor(device.priority || 3) }}>
+                          <DeviceIcon type={device.type || 'unknown'} className="w-4 h-4" />
+                        </div>
                       </div>
                       <div>
                         <div className="font-medium text-sm text-slate-200 flex items-center gap-2">
