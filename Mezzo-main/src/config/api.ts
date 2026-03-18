@@ -1,20 +1,8 @@
 // src/config/api.ts
 
-// 自動偵測 API Base URL
-export const getApiBaseUrl = (): string => {
-  // 開發環境
-  if (import.meta.env.DEV) {
-    return 'http://localhost:4000';
-  }
-  
-  // 生產環境：使用當前主機名
-  return `${window.location.protocol}//${window.location.hostname}:4000`;
-};
+import { getAuthHeaders } from '../auth/authService';
 
-// 或手動設定（取消註解使用）
-// export const API_BASE_URL = 'http://192.168.1.100:4000';
-
-export const API_BASE_URL = getApiBaseUrl();
+export const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
 // API 端點
 export const API_ENDPOINTS = {
@@ -29,7 +17,7 @@ export const API_ENDPOINTS = {
 };
 
 // WebSocket URL
-export const WS_URL = API_BASE_URL.replace('http', 'ws').replace(':4000', ':4001');
+export const WS_URL = import.meta.env.VITE_WS_URL || API_BASE_URL.replace('http', 'ws').replace(':4000', ':4001');
 
 // 輔助函數
 export const getStreamUrl = (relativeUrl: string): string => {
@@ -76,3 +64,19 @@ export const checkStreamAvailable = async (streamUrl: string): Promise<boolean> 
     return false;
   }
 };
+
+/**
+ * Authenticated fetch wrapper.
+ * Automatically attaches JWT Authorization header if available.
+ */
+export async function authFetch(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const authHeaders = await getAuthHeaders();
+  const headers = {
+    ...options.headers,
+    ...authHeaders,
+  };
+  return fetch(url, { ...options, headers });
+}

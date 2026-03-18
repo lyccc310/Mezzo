@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import type { BackupFile } from '../types.ts';
 
-// ✅ 配置資訊
 const API_BASE = '/nvr';
-const API_AUTH = 'QWRtaW46MTIzNA=='; // base64(Admin:1234)
+const API_AUTH = import.meta.env.VITE_NVR_AUTH || '';
+const DEFAULT_CHANNELS = '0, 1, 2, 3, 4';
 
 // 將時間轉換為 API 所需的格式 'YYYY-MM-DD HH:mm:00'
 function toApiDateTime(dtLocal: string) {

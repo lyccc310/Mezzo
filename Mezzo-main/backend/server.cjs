@@ -8,13 +8,14 @@
  * - MQTT 訊息橋接
  *
  * 服務埠號：
- * - HTTP API: 4000
- * - WebSocket: 4001
+ * - HTTP API: configurable via HTTP_PORT env
+ * - WebSocket: configurable via WS_PORT env
  */
 
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { exec, spawn } = require('child_process');
+const { spawn } = require('child_process');
 const mqtt = require('mqtt');
 const WebSocket = require('ws');
 const xml2js = require('xml2js');
@@ -22,27 +23,34 @@ const path = require('path');
 const fs = require('fs');
 const tls = require('tls');
 const net = require('net');
+const logger = require('./logger.cjs');
+const { requireAuth, verifyWsToken } = require('./auth.cjs');
+const db = require('./db.cjs');
+const redis = require('./redis.cjs');
+const { createRedisPttState } = require('./ptt-state-redis.cjs');
+const GPSBatcher = require('./gps-batcher.cjs');
+const pttLogic = require('./ptt-logic.cjs');
 
 const app = express();
 
 // ==================== 伺服器埠號配置 ====================
-const HTTP_PORT = 4000;  // HTTP REST API 服務埠號
-const WS_PORT = 4001;    // WebSocket 即時通訊埠號
-const HOST = '0.0.0.0';  // 監聽所有網路介面
+const HTTP_PORT = parseInt(process.env.HTTP_PORT) || 4000;
+const WS_PORT = parseInt(process.env.WS_PORT) || 4001;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // ==================== 系統配置 ====================
 
-const SERVER_URL = '192.168.254.1';
+const SERVER_URL = process.env.SERVER_URL || '192.168.254.1';
 const PUBLIC_URL = `http://${SERVER_URL}:${HTTP_PORT}`;
 
-// TAK Server 配置（暫時停用）
+// TAK Server 配置
 const TAK_CONFIG = {
-  enabled: false,  // ← 暫時關閉 WinTAK 整合
-  host: SERVER_URL,
-  port: 8087,
-  useTLS: false,
-  reconnectInterval: 5000,
-  heartbeatInterval: 30000
+  enabled: process.env.TAK_ENABLED === 'true',
+  host: process.env.TAK_HOST || SERVER_URL,
+  port: parseInt(process.env.TAK_PORT) || 8087,
+  useTLS: process.env.TAK_USE_TLS === 'true',
+  reconnectInterval: parseInt(process.env.TAK_RECONNECT_INTERVAL) || 5000,
+  heartbeatInterval: parseInt(process.env.TAK_HEARTBEAT_INTERVAL) || 30000
 };
 
 // ==================== 舊版 MQTT 配置（已移除） ====================
@@ -56,27 +64,32 @@ const TAK_CONFIG = {
 // ==================== PTT MQTT 配置（執法儀專用） ====================
 // 注意：此 Broker 專門用於執法儀 PTT 語音系統
 const PTT_MQTT_CONFIG = {
-  broker: 'mqtt://118.163.141.80:1688',  // PTT 執法儀 MQTT Broker 位址
+  broker: process.env.MQTT_BROKER_URL || 'mqtt://118.163.141.80:1688',
   topics: {
-    ALL: '/WJI/PTT/#'  // 訂閱所有 PTT 主題（萬用字元 # 表示所有子主題）
-    // 實際 Topic 範例：
-    // - /WJI/PTT/CHANNEL0001/GPS             - GPS 位置更新
-    // - /WJI/PTT/CHANNEL0001/SPEECH          - 群組語音音訊
-    // - /WJI/PTT/CHANNEL0001/PRIVATE/UUID    - 私人語音音訊
-    // - /WJI/PTT/CHANNEL0001/SOS             - 緊急求救訊號
-    // - /WJI/PTT/CHANNEL0001/CHANNEL_ANNOUNCE - 頻道廣播訊息
+    ALL: '/WJI/PTT/#'
   },
   options: {
-    clientId: `mezzo-ptt-bridge-${Date.now()}`,  // 客戶端 ID（使用時間戳確保唯一性）
-    clean: true,              // 清除 session（重新連接不保留訂閱）
-    reconnectPeriod: 5000,    // 自動重連間隔（毫秒）
-    connectTimeout: 30000     // 連接超時（毫秒）
+    clientId: `${process.env.MQTT_CLIENT_PREFIX || 'mezzo-ptt-bridge'}-${Date.now()}`,
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 30000
+  }
+};
+
+// ==================== BWC 執法儀影像串流配置 ====================
+const BWC_STREAM_HOST = process.env.BWC_STREAM_HOST || '118.163.141.80';
+const BWC_STREAM_PORT = process.env.BWC_STREAM_PORT || '80';
+const BWC_STREAM_AUTH = process.env.BWC_STREAM_AUTH || 'QWRtaW46MTIzNA==';
+const BWC_STREAM_CONFIG = {
+  defaultStreamUrl: `http://${BWC_STREAM_HOST}:${BWC_STREAM_PORT}/mjpeg_stream.cgi?Auth=${BWC_STREAM_AUTH}&ch=0`,
+  getStreamUrl: (uuid, channelIndex = 0) => {
+    return `http://${BWC_STREAM_HOST}:${BWC_STREAM_PORT}/mjpeg_stream.cgi?Auth=${BWC_STREAM_AUTH}&ch=${channelIndex}`;
   }
 };
 
 // ==================== RTSP 影像串流配置 ====================
 const STREAM_CONFIG = {
-  enabled: true,
+  enabled: process.env.STREAM_ENABLED !== 'false',
   outputDir: path.join(__dirname, 'streams'),
   ffmpegOptions: {
     rtspTransport: 'tcp',
@@ -86,8 +99,8 @@ const STREAM_CONFIG = {
     hlsListSize: 5,
     hlsFlags: 'delete_segments+append_list'
   },
-  maxStreams: 10,
-  streamTimeout: 300000
+  maxStreams: parseInt(process.env.STREAM_MAX) || 10,
+  streamTimeout: parseInt(process.env.STREAM_TIMEOUT) || 300000
 };
 
 // ==================== 資料儲存（記憶體） ====================
@@ -108,21 +121,33 @@ const streamActivity = new Map(); // 串流 ID → 最後活動時間
 const messages = [];  // 訊息歷史（最多保留 100 則）
 
 // ==================== PTT 狀態管理 ====================
-const pttState = {
-  activeUsers: new Map(),      // PTT 使用者 ID → { lastSeen, channel }
-  sosAlerts: new Map(),        // SOS 警報 ID → SOS 事件物件
-  channelUsers: new Map(),     // 頻道 ID → Set<使用者 ID>
-  broadcastedTranscripts: new Set(),  // 已廣播的語音轉錄訊息 ID（避免重複）
-  deviceConnections: new Map(),       // 設備 ID → WebSocket 連線（用於私人通話）
-  channelSpeakers: new Map()          // 頻道 ID → 當前發言者 UUID（搶麥機制）
-};
+// Redis-backed state: in-memory cache + write-through to Redis.
+// Falls back to pure in-memory if REDIS_URL is not set.
+const pttState = createRedisPttState(redis);
+
+// GPS batch writer for device_positions table
+const gpsBatcher = new GPSBatcher(db, {
+  flushIntervalMs: parseInt(process.env.GPS_BATCH_INTERVAL) || 5000,
+  maxBatchSize: parseInt(process.env.GPS_BATCH_SIZE) || 200,
+});
+
+// Initialize database schema and hydrate Redis state
+(async () => {
+  try {
+    await db.initSchema();
+    await pttState.hydrate();
+    gpsBatcher.start();
+  } catch (err) {
+    logger.error('Startup initialization error', { error: err.message });
+  }
+})();
 
 // ==================== 初始化 ====================
 
 // 確保影像串流輸出目錄存在
 if (STREAM_CONFIG.enabled && !fs.existsSync(STREAM_CONFIG.outputDir)) {
   fs.mkdirSync(STREAM_CONFIG.outputDir, { recursive: true });
-  console.log('📁 Created streams directory:', STREAM_CONFIG.outputDir);
+ logger.info('Created streams directory:', STREAM_CONFIG.outputDir);
 }
 const streamsPath = path.resolve(__dirname, 'streams');
 // ==================== TAK Client（支援 SSL）====================
@@ -138,7 +163,7 @@ class TAKClient {
   }
 
   connect() {
-    console.log(`🔌 Connecting to TAK Server: ${this.config.host}:${this.config.port} (TLS: ${this.config.useTLS})`);
+ logger.info(`Connecting to TAK Server: ${this.config.host}:${this.config.port} (TLS: ${this.config.useTLS})`);
 
     const connectionOptions = {
       host: this.config.host,
@@ -157,7 +182,7 @@ class TAKClient {
 
   setupSocketHandlers() {
     this.socket.on('connect', () => {
-      console.log('✅ Connected to TAK Server');
+ logger.info('Connected to TAK Server');
       this.connected = true;
       this.clearReconnectTimer();
       this.startHeartbeat();
@@ -165,32 +190,32 @@ class TAKClient {
     });
 
     this.socket.on('secureConnect', () => {
-      console.log('🔒 TLS connection established');
+ logger.info('TLS connection established');
       this.connected = true;
     });
 
     this.socket.on('data', (data) => {
       const message = data.toString();
       if (!message.includes('<ping') && !message.includes('<pong')) {
-        console.log('📥 TAK Server:', message.substring(0, 100) + '...');
+ logger.info('TAK Server:', message.substring(0, 100) + '...');
       }
       this.handleTakMessage(message);
     });
 
     this.socket.on('error', (error) => {
-      console.error('❌ TAK Server error:', error.message);
+ logger.error('TAK Server error:', error.message);
       this.connected = false;
     });
 
     this.socket.on('close', () => {
-      console.log('🔌 TAK Server disconnected');
+ logger.info('TAK Server disconnected');
       this.connected = false;
       this.stopHeartbeat();
       this.reconnect();
     });
 
     this.socket.on('timeout', () => {
-      console.warn('⏱️  TAK Server timeout');
+ logger.warn('⏱ TAK Server timeout');
       this.socket.destroy();
     });
   }
@@ -221,7 +246,7 @@ class TAKClient {
   reconnect() {
     if (this.reconnectTimer) return;
 
-    console.log(`⏳ Reconnecting to TAK Server in ${this.config.reconnectInterval / 1000}s...`);
+ logger.info(`⏳ Reconnecting to TAK Server in ${this.config.reconnectInterval / 1000}s...`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
@@ -230,7 +255,7 @@ class TAKClient {
 
   sendCoT(cotXml) {
     if (!this.connected || !this.socket) {
-      console.warn('⚠️  TAK Server not connected, queuing message');
+ logger.warn('TAK Server not connected, queuing message');
       this.messageQueue.push(cotXml);
       if (this.messageQueue.length > 100) {
         this.messageQueue.shift();
@@ -251,16 +276,11 @@ class TAKClient {
       this.socket.write(buffer);
 
       if (!message.includes('<ping')) {
-        console.log('📤 Sent to TAK Server');
-        // 把送出的 XML 印出來
-        console.log('------------------------------------------------');
-        console.log('📤 [DEBUG] 正要發送的 XML:');
-        console.log(message);
-        console.log('------------------------------------------------');
+        logger.debug('Sent message to TAK Server');
       }
       return true;
     } catch (error) {
-      console.error('❌ Failed to send to TAK:', error.message);
+ logger.error('Failed to send to TAK:', error.message);
       this.connected = false;
       return false;
     }
@@ -269,7 +289,7 @@ class TAKClient {
   flushMessageQueue() {
     if (this.messageQueue.length === 0) return;
 
-    console.log(`📤 Flushing ${this.messageQueue.length} queued messages`);
+ logger.info(`Flushing ${this.messageQueue.length} queued messages`);
     while (this.messageQueue.length > 0) {
       const message = this.messageQueue.shift();
       this.sendRaw(message);
@@ -303,7 +323,7 @@ class TAKClient {
 
       parser.parseString(cleanedMessage, (err, result) => {
         if (err) {
-          console.error('❌ TAK message parse error:', err.message);
+ logger.error('TAK message parse error:', err.message);
           return;
         }
 
@@ -312,7 +332,7 @@ class TAKClient {
         }
 
         const event = result.event;
-        console.log('📥 Received CoT from TAK Server:', event.$.uid);
+ logger.info('Received CoT from TAK Server:', event.$.uid);
 
         // 提取設備資訊
         const uid = event.$.uid;
@@ -320,7 +340,7 @@ class TAKClient {
         const point = event.point?.$;
 
         if (!point || !point.lat || !point.lon) {
-          console.warn('⚠️  CoT missing position data');
+ logger.warn('CoT missing position data');
           return;
         }
 
@@ -329,7 +349,7 @@ class TAKClient {
         const alt = parseFloat(point.hae || point.alt || 0);
 
         if (isNaN(lat) || isNaN(lng)) {
-          console.warn('⚠️  Invalid coordinates in CoT');
+ logger.warn('Invalid coordinates in CoT');
           return;
         }
 
@@ -377,10 +397,9 @@ class TAKClient {
         // 更新群組索引
         updateGroupIndex(uid, group);
 
-        console.log(`✅ Updated device from TAK: ${uid} (${callsign})`);
-        console.log(`   位置: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+        logger.info(`Updated device from TAK: ${uid}`);
         if (group !== '未分組') {
-          console.log(`   群組: ${group}${role ? ` - ${role}` : ''}`);
+ logger.info(`群組: ${group}${role ?` - ${role}` : ''}`);
         }
 
         // 廣播到前端
@@ -397,12 +416,12 @@ class TAKClient {
         });
       });
     } catch (error) {
-      console.error('❌ TAK message parse error:', error);
+ logger.error('TAK message parse error:', error);
     }
   }
 
   disconnect() {
-    console.log('🔌 Disconnecting from TAK Server');
+ logger.info('Disconnecting from TAK Server');
     this.stopHeartbeat();
     this.clearReconnectTimer();
     if (this.socket) {
@@ -484,27 +503,9 @@ function getDeviceGroup(deviceId) {
  * Data: 根據 Tag 類型而異的資料內容
  */
 function parsePTTMessage(buffer) {
-  try {
-    // 確保 buffer 至少有 160 bytes (Tag: 32 + UUID: 128)
-    if (buffer.length < 160) {
-      console.warn('⚠️ PTT message too short:', buffer.length);
-      return null;
-    }
-
-    // 解析 Tag (前 32 bytes) - 訊息類型標識
-    const tag = buffer.slice(0, 32).toString('utf8').trim().replace(/\0/g, '');
-
-    // 解析 UUID (32-160 bytes) - 發送者設備 ID
-    const uuid = buffer.slice(32, 160).toString('utf8').trim().replace(/\0/g, '');
-
-    // 解析 Data (160 bytes 之後) - 實際資料內容
-    const data = buffer.slice(160).toString('utf8').trim();
-
-    return { tag, uuid, data };
-  } catch (error) {
-    console.error('❌ PTT message parse error:', error);
-    return null;
-  }
+  const result = pttLogic.parsePTTMessage(buffer);
+  if (!result) logger.warn('PTT message too short or parse error', { length: buffer?.length });
+  return result;
 }
 
 /**
@@ -524,7 +525,7 @@ function parsePTTMessage(buffer) {
  */
 function handlePTT_GPS(channel, uuid, data) {
   try {
-    console.log('📍 [PTT GPS]', { channel, uuid, data });
+    logger.debug('PTT GPS received', { channel, uuid });
 
     // 解析 GPS 資料：支援兩種格式
     // 格式 1: "UUID,Lat,Lon" - 包含 UUID 的完整格式
@@ -541,27 +542,42 @@ function handlePTT_GPS(channel, uuid, data) {
       lat = parseFloat(parts[0]);
       lon = parseFloat(parts[1]);
     } else {
-      console.warn('⚠️ Invalid GPS data format:', data);
+      logger.warn('Invalid GPS data format', { uuid });
       return;
     }
 
     // 驗證座標有效性
     if (isNaN(lat) || isNaN(lon)) {
-      console.warn('⚠️ Invalid GPS coordinates:', { lat, lon });
+      logger.warn('Invalid GPS coordinates', { uuid });
       return;
+    }
+
+    // 計算設備的串流頻道索引（用於多設備支援）
+    // 基於 UUID 的穩定雜湊，確保同一設備總是取得相同頻道
+    const existingDevice = connectedDevices.get(uuid);
+    let streamChannelIndex = 0;
+    if (existingDevice && existingDevice.streamChannelIndex !== undefined) {
+      streamChannelIndex = existingDevice.streamChannelIndex;
+    } else {
+      // 新設備：分配頻道索引（基於當前設備數量）
+      streamChannelIndex = connectedDevices.size;
     }
 
     // 建立或更新設備物件
     const device = {
       id: uuid,                          // 設備唯一 ID
-      type: 'ptt_user',                  // 設備類型：PTT 使用者
+      type: 'bwc',                        // 設備類型：BWC 執法儀
       position: { lat, lng: lon, alt: 0 },  // 位置（經緯度、高度）
       callsign: uuid.substring(0, 20),   // 顯示名稱（截取前 20 字元）
       group: channel || 'PTT',           // 所屬群組（預設為 PTT）
       status: 'active',                  // 設備狀態
       source: 'ptt_gps',                 // 資料來源標記
       priority: 3,                       // 優先級（1-4，3 為一般）
-      lastUpdate: new Date().toISOString()  // 最後更新時間
+      lastUpdate: new Date().toISOString(),  // 最後更新時間
+      // ===== BWC 執法儀專屬屬性 =====
+      streamUrl: BWC_STREAM_CONFIG.getStreamUrl(uuid, streamChannelIndex),  // 預設影像串流
+      streamChannelIndex: streamChannelIndex,  // 串流頻道索引
+      isBWC: true                         // 標記為 BWC 執法儀
     };
 
     // 存入記憶體儲存
@@ -572,7 +588,16 @@ function handlePTT_GPS(channel, uuid, data) {
       channel
     });
 
-    console.log(`✅ PTT GPS updated: ${uuid} at ${lat}, ${lon}`);
+    // DB: batch GPS position + upsert device
+    gpsBatcher.add(uuid, lat, lon, 0, channel);
+    db.query(
+      `INSERT INTO devices (device_id, device_type, lat, lng, alt, callsign, device_group, status, source, is_bwc, stream_channel_index, last_update)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+       ON CONFLICT (device_id) DO UPDATE SET lat=$3, lng=$4, alt=$5, device_group=$7, status=$8, last_update=NOW()`,
+      [uuid, 'bwc', lat, lon, 0, uuid.substring(0, 20), channel || 'PTT', 'active', 'ptt_gps', true, streamChannelIndex]
+    ).catch(err => logger.error('Device upsert error', { error: err.message }));
+
+    logger.info(`PTT GPS updated: ${uuid}`);
 
     // 透過 WebSocket 廣播給所有連線的前端客戶端
     // 前端會在地圖上顯示/更新該設備的位置標記
@@ -582,7 +607,7 @@ function handlePTT_GPS(channel, uuid, data) {
     });
 
   } catch (error) {
-    console.error('❌ PTT GPS handler error:', error);
+    logger.error('PTT GPS handler error', { error: error.message });
   }
 }
 
@@ -591,12 +616,12 @@ function handlePTT_GPS(channel, uuid, data) {
  */
 function handlePTT_SOS(channel, uuid, data) {
   try {
-    console.log('🆘 [PTT SOS]', { channel, uuid, data });
+ logger.info('🆘 [PTT SOS]', { channel, uuid, data });
 
     // 解析 SOS 資料：格式 "Lat,Lon"
     const parts = data.split(',');
     if (parts.length < 2) {
-      console.warn('⚠️ Invalid SOS data format:', data);
+ logger.warn('Invalid SOS data format:', data);
       return;
     }
 
@@ -604,7 +629,7 @@ function handlePTT_SOS(channel, uuid, data) {
     const lon = parseFloat(parts[1]);
 
     if (isNaN(lat) || isNaN(lon)) {
-      console.warn('⚠️ Invalid SOS coordinates:', { lat, lon });
+      logger.warn('Invalid SOS coordinates', { uuid });
       return;
     }
 
@@ -625,6 +650,14 @@ function handlePTT_SOS(channel, uuid, data) {
     // 存入 SOS 警報列表
     pttState.sosAlerts.set(sosEvent.id, sosEvent);
 
+    // DB: persist SOS alert
+    db.query(
+      `INSERT INTO sos_alerts (alert_id, device_id, lat, lng, alt, callsign, channel, priority, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (alert_id) DO NOTHING`,
+      [sosEvent.id, uuid, lat, lon, 0, uuid.substring(0, 20), channel || 'PTT', 1, 'active']
+    ).catch(err => logger.error('SOS insert error', { error: err.message }));
+
     // 同時也作為設備更新
     connectedDevices.set(uuid, {
       ...sosEvent,
@@ -632,7 +665,7 @@ function handlePTT_SOS(channel, uuid, data) {
     });
     updateGroupIndex(uuid, sosEvent.group);
 
-    console.log(`🆘 SOS Alert from ${uuid} at ${lat}, ${lon}`);
+    logger.info('SOS Alert received', { uuid, channel });
 
     // 廣播 SOS 警報
     broadcastToClients({
@@ -647,7 +680,7 @@ function handlePTT_SOS(channel, uuid, data) {
     });
 
   } catch (error) {
-    console.error('❌ PTT SOS handler error:', error);
+ logger.error('PTT SOS handler error:', error);
   }
 }
 
@@ -656,7 +689,7 @@ function handlePTT_SOS(channel, uuid, data) {
  */
 function handlePTT_Broadcast(channel, uuid, tag, data) {
   try {
-    console.log('📢 [PTT Broadcast]', { channel, uuid, tag, data });
+ logger.info('[PTT Broadcast]', { channel, uuid, tag, data });
 
     // 建立訊息物件 - 廣播發送到所有頻道
     const message = {
@@ -676,7 +709,14 @@ function handlePTT_Broadcast(channel, uuid, tag, data) {
       messages.shift();
     }
 
-    console.log(`📢 PTT Broadcast: ${uuid} → ALL (from ${channel})`);
+    // DB: persist broadcast message
+    db.query(
+      `INSERT INTO messages (message_id, from_user, to_target, text, priority, source, channel)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [message.id, message.from, message.to, message.text, message.priority, message.source, channel]
+    ).catch(err => logger.error('Message insert error', { error: err.message }));
+
+ logger.info(`PTT Broadcast: ${uuid} → ALL (from ${channel})`);
 
     // 只廣播一次，使用 ptt_broadcast 類型
     broadcastToClients({
@@ -685,7 +725,7 @@ function handlePTT_Broadcast(channel, uuid, tag, data) {
     });
 
   } catch (error) {
-    console.error('❌ PTT Broadcast handler error:', error);
+ logger.error('PTT Broadcast handler error:', error);
   }
 }
 
@@ -694,7 +734,7 @@ function handlePTT_Broadcast(channel, uuid, tag, data) {
  */
 function handlePTT_TextMessage(channel, uuid, data) {
   try {
-    console.log('💬 [PTT Text Message]', { channel, uuid, data });
+ logger.info('[PTT Text Message]', { channel, uuid, data });
 
     // 建立訊息物件
     const message = {
@@ -713,7 +753,14 @@ function handlePTT_TextMessage(channel, uuid, data) {
       messages.shift();
     }
 
-    console.log(`💬 PTT Text Message: ${uuid} → ${channel}: ${data}`);
+    // DB: persist text message
+    db.query(
+      `INSERT INTO messages (message_id, from_user, to_target, text, priority, source, channel)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [message.id, message.from, message.to, message.text, message.priority, message.source, channel]
+    ).catch(err => logger.error('Message insert error', { error: err.message }));
+
+ logger.info(`PTT Text Message: ${uuid} → ${channel}: ${data}`);
 
     // 只廣播一次，使用 ptt_broadcast 類型
     broadcastToClients({
@@ -722,7 +769,7 @@ function handlePTT_TextMessage(channel, uuid, data) {
     });
 
   } catch (error) {
-    console.error('❌ PTT Text Message handler error:', error);
+ logger.error('PTT Text Message handler error:', error);
   }
 }
 
@@ -731,7 +778,7 @@ function handlePTT_TextMessage(channel, uuid, data) {
  */
 function handlePTT_MARK(channel, uuid, tag, data) {
   try {
-    console.log('📹 [PTT MARK]', { channel, uuid, tag, data });
+ logger.info('[PTT MARK]', { channel, uuid, tag, data });
 
     const isStart = tag.includes('START');
     const action = isStart ? '開始錄影' : '停止錄影';
@@ -758,7 +805,7 @@ function handlePTT_MARK(channel, uuid, tag, data) {
       channel: channel
     };
 
-    console.log(`📹 MARK ${action}: ${uuid}`);
+ logger.info(`MARK ${action}: ${uuid}`);
 
     // 廣播標記事件
     broadcastToClients({
@@ -767,7 +814,7 @@ function handlePTT_MARK(channel, uuid, tag, data) {
     });
 
   } catch (error) {
-    console.error('❌ PTT MARK handler error:', error);
+ logger.error('PTT MARK handler error:', error);
   }
 }
 
@@ -790,121 +837,183 @@ function handlePTT_MARK(channel, uuid, tag, data) {
  */
 function handlePTT_SPEECH(channel, uuid, tag, audioBuffer) {
   try {
-    console.log('🎙️ [PTT SPEECH]', {
+ logger.info('[PTT SPEECH]', {
       channel,
       uuid,
       tag,
-      audioSize: audioBuffer.length
+      audioSize: audioBuffer.length,
+      arbiterMode: pttState.arbiterMode
     });
 
+    // ===== 仲裁模式：不在音訊層攔截 =====
+    // BWC 不會等 ALLOW 才送音訊，所以仲裁只在 SPEECH_START 信令層控制
+    // 這裡只記錄狀態，音訊一律轉發給前端
+    if (pttState.arbiterMode) {
+      const currentSpeaker = pttState.channelSpeakers.get(channel);
+      const allowedSpeakers = pttState.allowedSpeakers.get(channel) || new Set();
+      const isApproved = currentSpeaker === uuid || allowedSpeakers.has(uuid);
+      if (!isApproved) {
+ logger.info(`[ARBITER] SPEECH from unapproved ${uuid} - forwarding anyway (BWC sends before ALLOW)`);
+      }
+    }
+
     // 將音訊 Binary 資料轉換為 Base64 字串
-    // 方便透過 JSON WebSocket 傳輸
     const audioData = audioBuffer.toString('base64');
 
     // 去重檢查：避免重複廣播同一段音訊
-    // 使用音訊的前 50 個字元作為指紋
     const messageKey = `${uuid}-${audioData.substring(0, 50)}`;
     if (pttState.broadcastedTranscripts.has(messageKey)) {
-      console.log(`⏭️ Skipping duplicate broadcast (already sent as transcript): ${uuid}`);
+ logger.info(`⏭ Skipping duplicate broadcast (already sent as transcript): ${uuid}`);
       return;
     }
 
     // 建立音訊封包事件物件
     const audioPacket = {
-      id: `speech-${uuid}-${Date.now()}`,  // 唯一識別碼
-      type: 'speech',                       // 類型：群組語音
-      channel: channel,                     // 頻道名稱
-      from: uuid,                           // 發送者 ID
-      timestamp: new Date().toISOString(),  // 時間戳記
-      audioData: audioData,                 // Base64 編碼的音訊
-      tag: tag                              // 原始訊息標籤
+      id: `speech-${uuid}-${Date.now()}`,
+      type: 'speech',
+      channel: channel,
+      from: uuid,
+      timestamp: new Date().toISOString(),
+      audioData: audioData,
+      tag: tag
     };
 
-    // 透過 WebSocket 廣播給所有連線的前端客戶端
-    // 前端 GPSTracking.tsx 會接收並播放音訊（遠端監聽功能）
+    // 群組語音廣播給所有連線的網頁端客戶端
     broadcastToClients({
       type: 'ptt_audio',
       packet: audioPacket
     });
 
-    console.log(`🎙️ SPEECH broadcasted: ${uuid} → ${channel} (${audioBuffer.length} bytes)`);
+ logger.info(`SPEECH broadcasted: ${uuid} → ${channel} (${audioBuffer.length} bytes, ${wss.clients.size} clients)`);
 
   } catch (error) {
-    console.error('❌ PTT SPEECH handler error:', error);
+ logger.error('PTT SPEECH handler error:', error);
   }
 }
 
 /**
- * 處理 PTT PRIVATE (私人語音)
+ * 處理 PTT PRIVATE (私人語音/房間語音)
+ *
+ * 注意：BWC 執法儀的 PRIVATE 模式實際上是「房間」概念
+ * targetDeviceId (如 user_9131) 代表一個房間 ID，
+ * 所有在該房間的人都應該收到音訊。
+ *
+ * 目前實作：廣播給所有連線的 WebSocket 客戶端（監控模式）
  */
 function handlePTT_PRIVATE(topic, channel, uuid, tag, audioBuffer) {
   try {
-    // 從 topic 中提取目標設備 ID
-    // 格式: /WJI/PTT/{Channel}/PRIVATE/{TargetDeviceId}
+    // 從 topic 中提取房間 ID
+    // 格式: /WJI/PTT/{Channel}/PRIVATE/{RoomId}
     const parts = topic.split('/');
-    const targetDeviceId = parts[parts.length - 1];
+    const roomId = parts[parts.length - 1];
 
-    console.log('📞 [PTT PRIVATE]', {
+    // ===== 自動建立房間：如果收到音訊但房間不存在，自動建立並通知前端 =====
+    if (!pttState.activePrivateCalls.has(roomId)) {
+ logger.info(`Auto-creating room from PRIVATE audio: ${roomId}`);
+      const autoCall = {
+        channel: channel,
+        from: uuid,
+        to: roomId,
+        privateTopicID: roomId,
+        startTime: new Date().toISOString(),
+        participants: new Set([uuid])
+      };
+      pttState.activePrivateCalls.set(roomId, autoCall);
+
+      // 通知所有前端：新房間出現
+      broadcastToClients({
+        type: 'private_call_started',
+        call: {
+          privateTopicID: roomId,
+          channel: channel,
+          from: uuid,
+          to: roomId,
+          startTime: autoCall.startTime
+        }
+      });
+ logger.info(`Room ${roomId} auto-created & broadcasted (Active rooms: ${pttState.activePrivateCalls.size})`);
+    }
+
+ logger.info('[PTT PRIVATE/ROOM]', {
       channel,
       from: uuid,
-      to: targetDeviceId,
+      room: roomId,
       tag,
       audioSize: audioBuffer.length
     });
 
-    // 建立私人音訊封包事件
+    // 建立私人/房間音訊封包事件
     const audioPacket = {
       id: `private-${uuid}-${Date.now()}`,
       type: 'private',
       channel: channel,
       from: uuid,
-      to: targetDeviceId,  // 目標設備 ID
+      room: roomId,
+      to: roomId,
       timestamp: new Date().toISOString(),
       audioData: audioBuffer.toString('base64'),
       tag: tag
     };
 
-    // 只發給目標設備（點對點）
-    const targetWs = pttState.deviceConnections.get(targetDeviceId);
-    const senderWs = pttState.deviceConnections.get(uuid);
+    // 廣播給已加入該私人房間的網頁端客戶端
+    const sentCount = broadcastToRoom(roomId, {
+      type: 'ptt_audio',
+      packet: audioPacket
+    });
 
-    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-      targetWs.send(JSON.stringify({
-        type: 'ptt_audio',
-        packet: audioPacket
-      }));
-      console.log(`📞 PRIVATE sent to target: ${uuid} → ${targetDeviceId}`);
-    } else {
-      console.log(`⚠️ Target device ${targetDeviceId} not connected`);
-    }
-
-    // 也發給發送者自己（讓發送者知道音訊已發送）
-    if (senderWs && senderWs.readyState === WebSocket.OPEN && uuid !== targetDeviceId) {
-      senderWs.send(JSON.stringify({
-        type: 'ptt_audio',
-        packet: audioPacket
-      }));
-      console.log(`📞 PRIVATE echo to sender: ${uuid}`);
-    }
+ logger.info(`PRIVATE/ROOM to room: ${uuid} → room:${roomId} (${sentCount} clients)`);
 
   } catch (error) {
-    console.error('❌ PTT PRIVATE handler error:', error);
+ logger.error('PTT PRIVATE handler error:', error);
   }
 }
 
 /**
  * 處理私人通話請求 (握手)
+ *
+ * 網頁端組長自動加入所有私人通話房間：
+ * - 當 BWC 執法儀發起私人通話時，自動追蹤該房間
+ * - 所有網頁端客戶端都能收到私人通話的音訊（監聽模式）
+ * - 組長可以看到所有進行中的私人通話
  */
 function handlePTT_PrivateRequest(channel, uuid, data) {
   try {
     // Data 格式: "TargetUUID,PrivateTopicID"
-    const [targetUUID, privateTopicID] = data.split(',');
+    logger.debug('PRIVATE_SPK_REQ received', { channel, uuid });
+    const parts = data.split(',');
+    const targetUUID = parts[0]?.trim();
+    const privateTopicID = parts[1]?.trim();
 
-    console.log('📞 [PRIVATE_SPK_REQ]', {
+    if (!targetUUID || !privateTopicID) {
+      logger.error('PRIVATE_SPK_REQ invalid data format', { uuid });
+      return;
+    }
+
+ logger.info('[PRIVATE_SPK_REQ]', {
       from: uuid,
       to: targetUUID,
       privateTopicID: privateTopicID
     });
+
+    // ===== 追蹤私人通話房間（網頁端組長自動加入） =====
+    const privateCall = {
+      channel: channel,
+      from: uuid,
+      to: targetUUID,
+      privateTopicID: privateTopicID,
+      startTime: new Date().toISOString(),
+      participants: new Set([uuid, targetUUID])
+    };
+    pttState.activePrivateCalls.set(privateTopicID, privateCall);
+
+    // DB: persist call record
+    db.query(
+      `INSERT INTO call_records (private_topic_id, channel, from_device, to_device, started_at)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [privateTopicID, channel, uuid, targetUUID, new Date()]
+    ).catch(err => logger.error('Call record insert error', { error: err.message }));
+
+ logger.info(`Private call room registered: ${privateTopicID} (Active rooms: ${pttState.activePrivateCalls.size})`);
 
     // 建立通話請求訊息
     const callRequest = {
@@ -916,15 +1025,28 @@ function handlePTT_PrivateRequest(channel, uuid, data) {
       timestamp: new Date().toISOString()
     };
 
-    // 只發給目標設備
+    // ===== 廣播通知前端：有新房間可加入 =====
+    broadcastToClients({
+      type: 'private_call_started',
+      call: {
+        privateTopicID: privateTopicID,
+        channel: channel,
+        from: uuid,
+        to: targetUUID,
+        startTime: privateCall.startTime
+      }
+    });
+ logger.info(`Room ${privateTopicID} created, notified ${wss.clients.size} web clients`);
+
+    // 發給目標設備
     const targetWs = pttState.deviceConnections.get(targetUUID);
     const senderWs = pttState.deviceConnections.get(uuid);
 
     if (targetWs && targetWs.readyState === WebSocket.OPEN) {
       targetWs.send(JSON.stringify(callRequest));
-      console.log(`📞 Private call request sent: ${uuid} → ${targetUUID} (Topic: ${privateTopicID})`);
+ logger.info(`Private call request sent: ${uuid} → ${targetUUID} (Topic: ${privateTopicID})`);
     } else {
-      console.log(`⚠️ Target device ${targetUUID} not connected`);
+ logger.info(`Target device ${targetUUID} not connected (web clients still monitoring)`);
     }
 
     // 通知發送者請求已發送
@@ -937,37 +1059,72 @@ function handlePTT_PrivateRequest(channel, uuid, data) {
     }
 
   } catch (error) {
-    console.error('❌ PTT PRIVATE_SPK_REQ handler error:', error);
+ logger.error('PTT PRIVATE_SPK_REQ handler error:', error);
   }
 }
 
 /**
  * 處理私人通話結束
+ *
+ * 當私人通話結束時：
+ * - 清理 activePrivateCalls 中的房間記錄
+ * - 通知所有網頁端客戶端該房間已關閉
  */
 function handlePTT_PrivateStop(channel, uuid, data) {
   try {
     const targetUUID = data.trim();
 
-    console.log('📞 [PRIVATE_SPK_STOP]', {
+ logger.info('[PRIVATE_SPK_STOP]', {
       channel: channel,
       from: uuid,
       to: targetUUID
     });
 
-    // 通知雙方結束通話
-    const targetWs = pttState.deviceConnections.get(targetUUID);
-    const senderWs = pttState.deviceConnections.get(uuid);
+    // ===== 查找並清理對應的私人通話房間 =====
+    let closedRoomId = null;
+    for (const [topicId, call] of pttState.activePrivateCalls.entries()) {
+      // 找到包含這兩個參與者的房間
+      if ((call.from === uuid && call.to === targetUUID) ||
+          (call.from === targetUUID && call.to === uuid)) {
+        closedRoomId = topicId;
+        pttState.activePrivateCalls.delete(topicId);
+
+        // DB: update call record with end time
+        db.query(
+          `UPDATE call_records SET ended_at=NOW(), status='ended',
+           duration_seconds=EXTRACT(EPOCH FROM (NOW() - started_at))::integer
+           WHERE private_topic_id=$1 AND status='active'`,
+          [topicId]
+        ).catch(err => logger.error('Call record update error', { error: err.message }));
+
+ logger.info(`Private call room closed: ${topicId} (Active rooms: ${pttState.activePrivateCalls.size})`);
+        break;
+      }
+    }
 
     const stopMessage = {
       type: 'private_call_stop',
       from: uuid,
       to: targetUUID,
+      privateTopicID: closedRoomId,
+      channel: channel,
       timestamp: new Date().toISOString()
     };
 
+    // ===== 廣播給所有網頁端客戶端（組長離開房間） =====
+    broadcastToClients({
+      type: 'private_call_ended',
+      call: stopMessage
+    });
+ logger.info(`Private call end broadcasted to ${wss.clients.size} web clients`);
+
+    // 通知雙方結束通話
+    const targetWs = pttState.deviceConnections.get(targetUUID);
+    const senderWs = pttState.deviceConnections.get(uuid);
+
     if (targetWs && targetWs.readyState === WebSocket.OPEN) {
       targetWs.send(JSON.stringify(stopMessage));
-      console.log(`📞 Private call stopped: ${uuid} → ${targetUUID}`);
+ logger.info(`Private call stopped: ${uuid} → ${targetUUID}`);
     }
 
     if (senderWs && senderWs.readyState === WebSocket.OPEN) {
@@ -975,80 +1132,115 @@ function handlePTT_PrivateStop(channel, uuid, data) {
     }
 
   } catch (error) {
-    console.error('❌ PTT PRIVATE_SPK_STOP handler error:', error);
+ logger.error('PTT PRIVATE_SPK_STOP handler error:', error);
   }
 }
 
 /**
- * 處理 PTT 群組通話「請求發言」(搶麥請求機制 - 需要當前說話者同意)
+ * 處理 PTT 群組通話「請求發言」
  * Tag: PTT_MSG_TYPE_SPEECH_START
+ *
+ * 組長仲裁模式：所有發言請求都需要組長（前端）核准
  */
 function handlePTT_SpeechStart(channel, uuid, data) {
   try {
-    console.log('🎙️ [PTT_MSG_TYPE_SPEECH_START]', {
-      channel: channel,
-      from: uuid,
+    logger.info('[PTT_MSG_TYPE_SPEECH_START]', {
+      channel, from: uuid,
+      arbiterMode: pttState.arbiterMode,
       currentSpeaker: pttState.channelSpeakers.get(channel)
     });
+    pttLogic.handlePTT_SpeechStart(channel, uuid, data, {
+      pttState, sendPTTSpeechResponse, broadcastToClients
+    });
+  } catch (error) {
+    logger.error('PTT SPEECH_START handler error:', error);
+  }
+}
 
-    const currentSpeaker = pttState.channelSpeakers.get(channel);
+/**
+ * 發送 PTT 發言回應 (ALLOW/DENY) 給 BWC 設備
+ * 透過 MQTT 發送到 /WJI/PTT/{Channel}/CHANNEL_ANNOUNCE
+ */
+function sendPTTSpeechResponse(channel, targetUUID, response) {
+  try {
+    const tag = response === 'ALLOW'
+      ? 'PTT_MSG_TYPE_SPEECH_START_ALLOW'
+      : 'PTT_MSG_TYPE_SPEECH_START_DENY';
 
-    // 檢查是否已有人在說話
-    if (currentSpeaker && currentSpeaker !== uuid) {
-      // 發送搶麥請求給當前說話者
-      console.log(`🔔 Sending mic request from ${uuid} to current speaker ${currentSpeaker}`);
+    // 建立 PTT 格式訊息 (Tag: 32 bytes + UUID: 128 bytes + Data)
+    const tagBuffer = Buffer.alloc(32);
+    tagBuffer.write(tag, 0, 'utf8');
 
-      const currentSpeakerWs = pttState.deviceConnections.get(currentSpeaker);
-      if (currentSpeakerWs && currentSpeakerWs.readyState === WebSocket.OPEN) {
-        currentSpeakerWs.send(JSON.stringify({
-          type: 'ptt_mic_request',
-          channel: channel,
-          requester: uuid,
-          currentSpeaker: currentSpeaker,
-          timestamp: new Date().toISOString()
-        }));
-        console.log(`📞 Mic request sent to ${currentSpeaker}`);
+    const uuidBuffer = Buffer.alloc(128);
+    uuidBuffer.write('SERVER', 0, 'utf8');  // 發送者是伺服器
+
+    const dataBuffer = Buffer.from(targetUUID, 'utf8');  // Data 是目標 UUID
+
+    const message = Buffer.concat([tagBuffer, uuidBuffer, dataBuffer]);
+
+    const topic = `/WJI/PTT/${channel}/CHANNEL_ANNOUNCE`;
+
+    pttMqttClient.publish(topic, message, (err) => {
+      if (err) {
+ logger.error(`Failed to send ${response} to ${targetUUID}:`, err);
+      } else {
+ logger.info(`Sent ${tag} to ${targetUUID} on ${topic}`);
       }
+    });
 
-      // 通知請求者：已發送請求，等待回應
-      const requesterWs = pttState.deviceConnections.get(uuid);
-      if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
-        requesterWs.send(JSON.stringify({
-          type: 'ptt_mic_request_sent',
-          channel: channel,
-          currentSpeaker: currentSpeaker,
-          timestamp: new Date().toISOString()
-        }));
-      }
+  } catch (error) {
+ logger.error('sendPTTSpeechResponse error:', error);
+  }
+}
 
-      return;
+/**
+ * 組長允許/拒絕發言請求
+ * 由前端 WebSocket 呼叫
+ */
+function arbiterDecision(channel, targetUUID, decision) {
+  try {
+    logger.info(`Arbiter decision: ${decision} for ${targetUUID} on channel ${channel}`);
+    pttLogic.arbiterDecision(channel, targetUUID, decision, {
+      pttState, sendPTTSpeechResponse, broadcastToClients
+    });
+  } catch (error) {
+    logger.error('arbiterDecision error:', error);
+  }
+}
+
+/**
+ * 組長撤銷發言權限
+ */
+function arbiterRevoke(channel, targetUUID) {
+  try {
+ logger.info(`Arbiter revoke: ${targetUUID} on channel ${channel}`);
+
+    // 從允許列表中移除
+    const allowedSpeakers = pttState.allowedSpeakers.get(channel);
+    if (allowedSpeakers) {
+      allowedSpeakers.delete(targetUUID);
     }
 
-    // 沒有人在使用，直接允許
-    pttState.channelSpeakers.set(channel, uuid);
-    console.log(`✅ Speech request allowed: ${uuid} on channel ${channel}`);
-
-    // 通知請求者
-    const senderWs = pttState.deviceConnections.get(uuid);
-    if (senderWs && senderWs.readyState === WebSocket.OPEN) {
-      senderWs.send(JSON.stringify({
-        type: 'ptt_speech_allow',
-        channel: channel,
-        timestamp: new Date().toISOString()
-      }));
+    // 如果是當前發言者，清除
+    if (pttState.channelSpeakers.get(channel) === targetUUID) {
+      pttState.channelSpeakers.delete(channel);
     }
 
-    // 廣播給所有人：誰正在說話
+    // 發送 DENY 給 BWC 設備（表示發言權被撤銷）
+    sendPTTSpeechResponse(channel, targetUUID, 'DENY');
+
+    // 廣播給所有前端
     broadcastToClients({
       type: 'ptt_speaker_update',
       channel: channel,
-      speaker: uuid,
-      action: 'start',
+      speaker: null,
+      action: 'revoke',
+      revokedFrom: targetUUID,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('❌ PTT SPEECH_START handler error:', error);
+ logger.error('arbiterRevoke error:', error);
   }
 }
 
@@ -1061,7 +1253,7 @@ function handlePTT_MicResponse(channel, uuid, data) {
     // data 格式: "requesterUUID,accept/deny"
     const [requesterUUID, response] = data.split(',');
 
-    console.log('🔔 [PTT_MSG_TYPE_MIC_RESPONSE]', {
+ logger.info('[PTT_MSG_TYPE_MIC_RESPONSE]', {
       channel: channel,
       from: uuid,
       requester: requesterUUID,
@@ -1074,7 +1266,7 @@ function handlePTT_MicResponse(channel, uuid, data) {
     if (response === 'accept') {
       // 當前說話者同意讓出麥克風
       pttState.channelSpeakers.set(channel, requesterUUID);
-      console.log(`✅ Mic handed over: ${uuid} → ${requesterUUID}`);
+ logger.info(`Mic handed over: ${uuid} → ${requesterUUID}`);
 
       // 通知請求者：已獲得麥克風
       if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
@@ -1096,7 +1288,7 @@ function handlePTT_MicResponse(channel, uuid, data) {
       });
     } else {
       // 拒絕請求
-      console.log(`🚫 Mic request denied: ${uuid} refused ${requesterUUID}`);
+ logger.info(`Mic request denied: ${uuid} refused ${requesterUUID}`);
 
       if (requesterWs && requesterWs.readyState === WebSocket.OPEN) {
         requesterWs.send(JSON.stringify({
@@ -1109,7 +1301,7 @@ function handlePTT_MicResponse(channel, uuid, data) {
     }
 
   } catch (error) {
-    console.error('❌ PTT MIC_RESPONSE handler error:', error);
+ logger.error('PTT MIC_RESPONSE handler error:', error);
   }
 }
 
@@ -1119,33 +1311,12 @@ function handlePTT_MicResponse(channel, uuid, data) {
  */
 function handlePTT_SpeechStop(channel, uuid, data) {
   try {
-    console.log('🎙️ [PTT_MSG_TYPE_SPEECH_STOP]', {
-      channel: channel,
-      from: uuid
+    logger.info('[PTT_MSG_TYPE_SPEECH_STOP]', { channel, from: uuid });
+    pttLogic.handlePTT_SpeechStop(channel, uuid, data, {
+      pttState, broadcastToClients
     });
-
-    const currentSpeaker = pttState.channelSpeakers.get(channel);
-
-    // 只有當前說話者才能結束發言
-    if (currentSpeaker === uuid) {
-      pttState.channelSpeakers.delete(channel);
-      console.log(`🛑 Speech stopped: ${uuid} on channel ${channel}`);
-
-      // 廣播給所有人：發言已結束
-      broadcastToClients({
-        type: 'ptt_speaker_update',
-        channel: channel,
-        speaker: null,
-        action: 'stop',
-        previousSpeaker: uuid,
-        timestamp: new Date().toISOString()
-      });
-    } else {
-      console.warn(`⚠️ Unauthorized speech stop attempt: ${uuid} (current: ${currentSpeaker})`);
-    }
-
   } catch (error) {
-    console.error('❌ PTT SPEECH_STOP handler error:', error);
+    logger.error('PTT SPEECH_STOP handler error:', error);
   }
 }
 
@@ -1163,7 +1334,7 @@ function handlePTT_SpeechAllow(channel, uuid, data) {
   try {
     const allowedUUID = data.trim() || uuid;
 
-    console.log('✅ [PTT_MSG_TYPE_SPEECH_START_ALLOW]', {
+ logger.info('[PTT_MSG_TYPE_SPEECH_START_ALLOW]', {
       channel: channel,
       allowedBy: uuid,
       allowedUUID: allowedUUID
@@ -1193,10 +1364,10 @@ function handlePTT_SpeechAllow(channel, uuid, data) {
       timestamp: new Date().toISOString()
     });
 
-    console.log(`✅ Speech allowed: ${allowedUUID} on channel ${channel} (by ${uuid})`);
+ logger.info(`Speech allowed: ${allowedUUID} on channel ${channel} (by ${uuid})`);
 
   } catch (error) {
-    console.error('❌ PTT SPEECH_ALLOW handler error:', error);
+ logger.error('PTT SPEECH_ALLOW handler error:', error);
   }
 }
 
@@ -1224,10 +1395,10 @@ class StreamManager {
     const isRTSP = streamUrl.startsWith('rtsp://');
     const isHTTP = streamUrl.startsWith('http://') || streamUrl.startsWith('https://');
 
-    console.log(`🎥 Starting stream: ${streamId}`);
-    console.log(`   Source: ${streamUrl}`);
-    console.log(`   Type: ${isRTSP ? 'RTSP' : isHTTP ? 'HTTP/MJPEG' : 'Unknown'}`);
-    console.log(`   HLS:  /streams/${streamId}.m3u8`);
+ logger.info(`Starting stream: ${streamId}`);
+ logger.info(`Source: ${streamUrl}`);
+ logger.info(`Type: ${isRTSP ? 'RTSP' : isHTTP ? 'HTTP/MJPEG' : 'Unknown'}`);
+ logger.info(`HLS: /streams/${streamId}.m3u8`);
 
     let ffmpegArgs = [];
 
@@ -1278,19 +1449,19 @@ class StreamManager {
     ffmpeg.stderr.on('data', (data) => {
       const message = data.toString();
       if (message.includes('error') || message.includes('Error')) {
-        console.error(`[${streamId}] ❌`, message.substring(0, 200));
+ logger.error(`[${streamId}]`, message.substring(0, 200));
       }
     });
 
     ffmpeg.on('close', (code) => {
-      console.log(`[${streamId}] FFmpeg exited with code ${code}`);
+ logger.info(`[${streamId}] FFmpeg exited with code ${code}`);
       this.processes.delete(streamId);
       this.streams.delete(streamId);
       this.activity.delete(streamId);
     });
 
     ffmpeg.on('error', (error) => {
-      console.error(`[${streamId}] FFmpeg error:`, error.message);
+ logger.error(`[${streamId}] FFmpeg error:`, error.message);
     });
 
     this.processes.set(streamId, ffmpeg);
@@ -1314,7 +1485,7 @@ class StreamManager {
   stopStream(streamId) {
     const process = this.processes.get(streamId);
     if (process) {
-      console.log(`🛑 Stopping stream: ${streamId}`);
+ logger.info(`Stopping stream: ${streamId}`);
       process.kill('SIGTERM');
       this.processes.delete(streamId);
       this.streams.delete(streamId);
@@ -1335,7 +1506,7 @@ class StreamManager {
         }
       });
     } catch (error) {
-      console.error(`Error cleaning up stream files for ${streamId}:`, error);
+ logger.error(`Error cleaning up stream files for ${streamId}:`, error);
     }
   }
 
@@ -1347,7 +1518,7 @@ class StreamManager {
     const now = Date.now();
     this.activity.forEach((lastActivity, streamId) => {
       if (now - lastActivity > this.config.streamTimeout) {
-        console.log(`⏱️  Stream ${streamId} inactive, stopping...`);
+ logger.info(`⏱ Stream ${streamId} inactive, stopping...`);
         this.stopStream(streamId);
       }
     });
@@ -1362,7 +1533,7 @@ class StreamManager {
   }
 
   stopAllStreams() {
-    console.log('🛑 Stopping all streams...');
+ logger.info('Stopping all streams...');
     this.processes.forEach((process, streamId) => {
       this.stopStream(streamId);
     });
@@ -1386,21 +1557,21 @@ if (STREAM_CONFIG.enabled) {
 const pttMqttClient = mqtt.connect(PTT_MQTT_CONFIG.broker, PTT_MQTT_CONFIG.options);
 
 pttMqttClient.on('connect', () => {
-  console.log('✅ Connected to PTT MQTT Broker');
+ logger.info('Connected to PTT MQTT Broker');
 
   // 訂閱所有 PTT 主題
   pttMqttClient.subscribe(PTT_MQTT_CONFIG.topics.ALL, (err) => {
     if (!err) {
-      console.log(`📡 Subscribed to PTT: ${PTT_MQTT_CONFIG.topics.ALL}`);
+ logger.info(`Subscribed to PTT: ${PTT_MQTT_CONFIG.topics.ALL}`);
     } else {
-      console.error(`❌ PTT Subscribe failed:`, err);
+ logger.error(`PTT Subscribe failed:`, err);
     }
   });
 });
 
 pttMqttClient.on('message', (topic, message) => {
   try {
-    console.log(`📨 PTT MQTT [${topic}]:`, message.length, 'bytes');
+ logger.info(`PTT MQTT [${topic}]:`, message.length, 'bytes');
 
     // ===== 按照主管指示：拆解 Topic =====
     const InTopic = topic.toString().split('/');
@@ -1413,26 +1584,26 @@ pttMqttClient.on('message', (topic, message) => {
     // InTopic[4] = 'GPS'
 
     if (InTopic.length < 5) {
-      console.warn('⚠️ Invalid PTT topic format:', topic);
+ logger.warn('Invalid PTT topic format:', topic);
       return;
     }
 
     const channel = InTopic[3];    // 頻道名稱
     const function_ = InTopic[4];  // 功能類型
 
-    console.log(`📡 PTT Message: Channel=${channel}, Function=${function_}`);
+ logger.info(`PTT Message: Channel=${channel}, Function=${function_}`);
 
     // 解析 PTT 二進位格式
     const parsed = parsePTTMessage(message);
     if (!parsed) {
-      console.warn('⚠️ Failed to parse PTT message');
+ logger.warn('Failed to parse PTT message');
       return;
     }
 
     const { tag, uuid, data } = parsed;
-    console.log(`   Tag: ${tag}`);
-    console.log(`   UUID: ${uuid}`);
-    console.log(`   Data: ${data}`);
+ logger.info(`Tag: ${tag}`);
+ logger.info(`UUID: ${uuid}`);
+ logger.info(`Data: ${data}`);
 
     // ===== 根據功能類型分類處理 =====
     switch (function_) {
@@ -1446,6 +1617,8 @@ pttMqttClient.on('message', (topic, message) => {
 
       case 'CHANNEL_ANNOUNCE':
         // 根據 Tag 區分不同類型的廣播訊息
+        // DEBUG: 顯示 raw tag hex 以利除錯
+ logger.info(`[CHANNEL_ANNOUNCE] tag="${tag}" (hex: ${Buffer.from(tag).toString('hex')}) uuid="${uuid}" data="${data}"`);
         if (tag === 'TEXT_MESSAGE') {
           handlePTT_TextMessage(channel, uuid, data);
         } else if (tag === 'BROADCAST') {
@@ -1465,7 +1638,7 @@ pttMqttClient.on('message', (topic, message) => {
           handlePTT_PrivateStop(channel, uuid, data);
         } else {
           // 其他未知的 CHANNEL_ANNOUNCE 訊息
-          console.log(`📢 [CHANNEL_ANNOUNCE] Unknown tag: ${tag}`);
+ logger.info(`[CHANNEL_ANNOUNCE] Unknown tag: ${tag}`);
           handlePTT_Broadcast(channel, uuid, tag, data);
         }
         break;
@@ -1485,20 +1658,20 @@ pttMqttClient.on('message', (topic, message) => {
         break;
 
       default:
-        console.log(`⚠️ Unknown PTT function: ${function_}, tag: ${tag}`);
+ logger.info(`Unknown PTT function: ${function_}, tag: ${tag}`);
     }
 
   } catch (error) {
-    console.error('❌ PTT MQTT message error:', error);
+ logger.error('PTT MQTT message error:', error);
   }
 });
 
 pttMqttClient.on('error', (error) => {
-  console.error('❌ PTT MQTT Error:', error.message);
+ logger.error('PTT MQTT Error:', error.message);
 });
 
 pttMqttClient.on('reconnect', () => {
-  console.log('🔄 PTT MQTT reconnecting...');
+ logger.info('PTT MQTT reconnecting...');
 });
 
 // ==================== WebSocket Server ====================
@@ -1508,23 +1681,42 @@ const wss = new WebSocket.Server({
 });
 
 wss.on('listening', () => {
-  console.log(`✅ WebSocket Server successfully started on port ${WS_PORT}`);
-  console.log(`   Listening on: ${HOST}:${WS_PORT}`);
+ logger.info(`WebSocket Server successfully started on port ${WS_PORT}`);
+ logger.info(`Listening on: ${HOST}:${WS_PORT}`);
 });
 
 wss.on('error', (error) => {
-  console.error(`❌ WebSocket Server failed:`, error);
+ logger.error(`WebSocket Server failed:`, error);
   if (error.code === 'EADDRINUSE') {
-    console.error(`⚠️  Port ${WS_PORT} is already in use!`);
+ logger.error(`Port ${WS_PORT} is already in use!`);
     process.exit(1);
   }
 });
 
 // 新連線
-wss.on('connection', (ws, req) => {
-  const clientIp = req.socket.remoteAddress;
-  console.log(`🔌 WebSocket client connected from ${clientIp}`);
-  console.log(`   Total clients: ${wss.clients.size}`);
+wss.on('connection', async (ws, req) => {
+  // WebSocket JWT authentication
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const token = url.searchParams.get('token');
+
+    if (process.env.COGNITO_USER_POOL_ID) {
+      const user = await verifyWsToken(token);
+      if (!user) {
+        ws.close(4001, 'Authentication required');
+        return;
+      }
+      ws.user = user;
+      logger.info('WebSocket authenticated', { username: user.username });
+    }
+  } catch (err) {
+    logger.error('WebSocket auth error', { error: err.message });
+    ws.close(4001, 'Authentication error');
+    return;
+  }
+
+  logger.info('WebSocket client connected');
+ logger.info(`Total clients: ${wss.clients.size}`);
 
   const initialDevices = getValidDevices();
   ws.send(JSON.stringify({
@@ -1541,7 +1733,7 @@ wss.on('connection', (ws, req) => {
       const data = JSON.parse(message);
       handleWebSocketMessage(ws, data);
     } catch (error) {
-      console.error('❌ WebSocket message error:', error);
+ logger.error('WebSocket message error:', error);
     }
   });
 
@@ -1549,14 +1741,16 @@ wss.on('connection', (ws, req) => {
     // 從設備連線表中移除
     if (ws.deviceId) {
       pttState.deviceConnections.delete(ws.deviceId);
-      console.log(`📱 Device unregistered: ${ws.deviceId}`);
+ logger.info(`Device unregistered: ${ws.deviceId}`);
     }
-    console.log(`🔌 WebSocket client disconnected from ${clientIp}`);
-    console.log(`   Remaining clients: ${wss.clients.size}`);
+    // 離開所有房間
+    leaveAllRooms(ws);
+    logger.info('WebSocket client disconnected');
+ logger.info(`Remaining clients: ${wss.clients.size}`);
   });
 
   ws.on('error', (error) => {
-    console.error('❌ WebSocket client error:', error);
+ logger.error('WebSocket client error:', error);
   });
 });
 
@@ -1570,14 +1764,67 @@ function broadcastToClients(data) {
         client.send(message);
         successCount++;
       } catch (error) {
-        console.error('❌ Broadcast error:', error);
+ logger.error('Broadcast error:', error);
       }
     }
   });
 
   if (successCount > 0) {
-    console.log(`📤 Broadcast to ${successCount} clients`);
+ logger.info(`Broadcast to ${successCount} clients`);
   }
+}
+
+// ===== 房間管理函數（網頁端加入/離開房間） =====
+
+/**
+ * 網頁端客戶端加入房間
+ * @param {WebSocket} ws - WebSocket 連線
+ * @param {string} roomId - 房間 ID（頻道名稱或私人房間 ID）
+ */
+function joinRoom(ws, roomId) {
+  pttLogic.joinRoom(ws, roomId, { pttState });
+  logger.info(`Client joined room: ${roomId} (Room size: ${pttState.roomClients.get(roomId)?.size})`);
+}
+
+/**
+ * 網頁端客戶端離開房間
+ * @param {WebSocket} ws - WebSocket 連線
+ * @param {string} roomId - 房間 ID
+ */
+function leaveRoom(ws, roomId) {
+  pttLogic.leaveRoom(ws, roomId, { pttState });
+  logger.info(`Client left room: ${roomId}`);
+}
+
+/**
+ * 網頁端客戶端離開所有房間（斷線時呼叫）
+ * @param {WebSocket} ws - WebSocket 連線
+ */
+function leaveAllRooms(ws) {
+  const roomCount = pttState.clientRooms.get(ws)?.size ?? 0;
+  pttLogic.leaveAllRooms(ws, { pttState });
+  if (roomCount > 0) logger.info(`Client left all rooms (${roomCount} rooms)`);
+}
+
+/**
+ * 廣播訊息給指定房間的所有網頁端客戶端
+ * @param {string} roomId - 房間 ID
+ * @param {object} data - 要廣播的資料
+ */
+function broadcastToRoom(roomId, data) {
+  const count = pttLogic.broadcastToRoom(roomId, data, { pttState, WebSocket });
+  logger.info(`Room broadcast: ${roomId} → ${count} clients`);
+  return count;
+}
+
+/**
+ * 取得客戶端已加入的所有房間
+ * @param {WebSocket} ws - WebSocket 連線
+ * @returns {Array<string>} 房間 ID 列表
+ */
+function getClientRooms(ws) {
+  const rooms = pttState.clientRooms.get(ws);
+  return rooms ? Array.from(rooms) : [];
 }
 
 // ===== WebRTC 信令輔助函數 =====
@@ -1591,7 +1838,7 @@ function broadcastToClients(data) {
 function broadcastToChannel(channel, message, excludeUUID) {
   const channelUsers = pttState.channelUsers.get(channel);
   if (!channelUsers || channelUsers.size === 0) {
-    console.warn(`⚠️ No users in channel ${channel}`);
+ logger.warn(`No users in channel ${channel}`);
     return;
   }
 
@@ -1606,13 +1853,13 @@ function broadcastToChannel(channel, message, excludeUUID) {
           targetWs.send(messageStr);
           successCount++;
         } catch (error) {
-          console.error(`❌ Failed to send to ${userId}:`, error);
+ logger.error(`Failed to send to ${userId}:`, error);
         }
       }
     }
   });
 
-  console.log(`📤 Broadcast to ${successCount} users in channel ${channel} (excluded: ${excludeUUID})`);
+ logger.info(`Broadcast to ${successCount} users in channel ${channel} (excluded: ${excludeUUID})`);
 }
 
 /**
@@ -1623,26 +1870,43 @@ function broadcastToChannel(channel, message, excludeUUID) {
 function sendToDevice(deviceId, message) {
   const targetWs = pttState.deviceConnections.get(deviceId);
   if (!targetWs || targetWs.readyState !== WebSocket.OPEN) {
-    console.warn(`⚠️ Device ${deviceId} not connected or not ready`);
+ logger.warn(`Device ${deviceId} not connected or not ready`);
     return;
   }
 
   try {
     targetWs.send(JSON.stringify(message));
-    console.log(`✅ Sent message to device ${deviceId}`);
+ logger.info(`Sent message to device ${deviceId}`);
   } catch (error) {
-    console.error(`❌ Failed to send to ${deviceId}:`, error);
+ logger.error(`Failed to send to ${deviceId}:`, error);
   }
 }
 
+// Input validation helpers
+function isValidString(val, maxLen = 128) {
+  return typeof val === 'string' && val.length > 0 && val.length <= maxLen;
+}
+
+function isValidId(val) {
+  return isValidString(val, 128) && /^[a-zA-Z0-9_\-:.]+$/.test(val);
+}
+
 function handleWebSocketMessage(ws, data) {
+  if (!data || typeof data.type !== 'string') {
+    ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
+    return;
+  }
+
   switch (data.type) {
     case 'register_device':
-      // 前端註冊設備 ID（用於私人通話）
-      if (data.deviceId) {
+      if (!isValidId(data.deviceId)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid deviceId' }));
+        break;
+      }
+      {
         pttState.deviceConnections.set(data.deviceId, ws);
-        ws.deviceId = data.deviceId;  // 將 deviceId 附加到 ws 物件
-        console.log(`📱 Device registered: ${data.deviceId} (Total: ${pttState.deviceConnections.size})`);
+        ws.deviceId = data.deviceId;
+        logger.info('Device registered', { deviceId: data.deviceId, total: pttState.deviceConnections.size });
       }
       break;
 
@@ -1706,40 +1970,206 @@ function handleWebSocketMessage(ws, data) {
 
     // ===== WebRTC 信令處理 =====
     case 'webrtc_offer':
-      // 收到 WebRTC Offer，廣播給頻道內所有人（除了發送者）
-      console.log(`📤 Broadcasting WebRTC offer from ${data.from} to channel ${data.channel}`);
+      if (!isValidString(data.from) || !isValidString(data.channel)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid webrtc_offer fields' }));
+        break;
+      }
+      logger.info('Broadcasting WebRTC offer', { from: data.from, channel: data.channel });
       broadcastToChannel(data.channel, data, data.from);
       break;
 
     case 'webrtc_answer':
-      // 收到 WebRTC Answer，轉發給指定的說話者
-      console.log(`📤 Forwarding WebRTC answer from ${data.from} to ${data.to}`);
+      if (!isValidString(data.from) || !isValidString(data.to)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid webrtc_answer fields' }));
+        break;
+      }
+      logger.info('Forwarding WebRTC answer', { from: data.from, to: data.to });
       sendToDevice(data.to, data);
       break;
 
     case 'webrtc_ice_candidate':
-      // 收到 ICE Candidate，根據 to 欄位決定廣播或轉發
+      if (!isValidString(data.from)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid webrtc_ice_candidate fields' }));
+        break;
+      }
       if (data.to === 'all') {
-        console.log(`📤 Broadcasting ICE candidate from ${data.from} to channel ${data.channel}`);
+        logger.debug('Broadcasting ICE candidate', { from: data.from, channel: data.channel });
         broadcastToChannel(data.channel, data, data.from);
       } else {
-        console.log(`📤 Forwarding ICE candidate from ${data.from} to ${data.to}`);
+        logger.debug('Forwarding ICE candidate', { from: data.from, to: data.to });
         sendToDevice(data.to, data);
+      }
+      break;
+
+    // ===== 組長仲裁控制 =====
+    case 'arbiter_allow':
+      if (!isValidString(data.channel) || !isValidString(data.targetUUID)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Missing channel or targetUUID' }));
+        break;
+      }
+      arbiterDecision(data.channel, data.targetUUID, 'allow');
+      logger.info('Arbiter allowed', { targetUUID: data.targetUUID, channel: data.channel });
+      break;
+
+    case 'arbiter_deny':
+      if (!isValidString(data.channel) || !isValidString(data.targetUUID)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Missing channel or targetUUID' }));
+        break;
+      }
+      arbiterDecision(data.channel, data.targetUUID, 'deny');
+      logger.info('Arbiter denied', { targetUUID: data.targetUUID, channel: data.channel });
+      break;
+
+    case 'arbiter_revoke':
+      if (!isValidString(data.channel) || !isValidString(data.targetUUID)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Missing channel or targetUUID' }));
+        break;
+      }
+      arbiterRevoke(data.channel, data.targetUUID);
+      logger.info('Arbiter revoked', { targetUUID: data.targetUUID, channel: data.channel });
+      break;
+
+    case 'arbiter_mode_toggle':
+      if (data.enabled !== undefined && typeof data.enabled !== 'boolean') {
+        ws.send(JSON.stringify({ type: 'error', message: 'enabled must be boolean' }));
+        break;
+      }
+      pttState.arbiterMode = data.enabled !== undefined ? data.enabled : !pttState.arbiterMode;
+ logger.info(`Arbiter mode: ${pttState.arbiterMode ? 'ENABLED' : 'DISABLED'}`);
+      broadcastToClients({
+        type: 'arbiter_mode_status',
+        enabled: pttState.arbiterMode,
+        timestamp: new Date().toISOString()
+      });
+      break;
+
+    case 'get_pending_requests':
+      // 取得等待核准的發言請求
+      {
+        const channel = data.channel;
+        const pendingRequests = pttState.pendingSpeechRequests.get(channel) || [];
+        const allowedSpeakers = Array.from(pttState.allowedSpeakers.get(channel) || []);
+        ws.send(JSON.stringify({
+          type: 'pending_requests_response',
+          channel: channel,
+          pendingRequests: pendingRequests,
+          allowedSpeakers: allowedSpeakers,
+          currentSpeaker: pttState.channelSpeakers.get(channel) || null,
+          arbiterMode: pttState.arbiterMode,
+          timestamp: new Date().toISOString()
+        }));
+      }
+      break;
+
+    case 'get_active_private_calls':
+      // 取得所有進行中的房間（僅回傳列表，不自動加入）
+      {
+        const activeCalls = [];
+        for (const [topicId, call] of pttState.activePrivateCalls.entries()) {
+          activeCalls.push({
+            privateTopicID: topicId,
+            channel: call.channel,
+            from: call.from,
+            to: call.to,
+            startTime: call.startTime
+          });
+        }
+        ws.send(JSON.stringify({
+          type: 'active_private_calls_response',
+          calls: activeCalls,
+          count: activeCalls.length,
+          timestamp: new Date().toISOString()
+        }));
+ logger.info(`Active rooms sent to client: ${activeCalls.length} rooms`);
+      }
+      break;
+
+    // ===== 房間管理（網頁端加入/離開房間） =====
+    case 'join_room':
+      {
+        if (!isValidString(data.roomId)) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid roomId' }));
+          break;
+        }
+        const roomId = data.roomId;
+        joinRoom(ws, roomId);
+        ws.send(JSON.stringify({
+          type: 'room_joined',
+          roomId: roomId,
+          joinedRooms: getClientRooms(ws),
+          timestamp: new Date().toISOString()
+        }));
+      }
+      break;
+
+    case 'create_test_room':
+      // Only available in development mode
+      if (process.env.NODE_ENV === 'production') {
+        ws.send(JSON.stringify({ type: 'error', message: 'Not available in production' }));
+        break;
+      }
+      {
+        const testRoomId = data.roomId || `test_room_${Date.now()}`;
+        const testCall = {
+          channel: 'TEST',
+          from: data.from || 'WEB_TEST',
+          to: data.to || 'TEST_TARGET',
+          privateTopicID: testRoomId,
+          startTime: new Date().toISOString(),
+          participants: new Set(['WEB_TEST', 'TEST_TARGET'])
+        };
+        pttState.activePrivateCalls.set(testRoomId, testCall);
+        logger.info('Test room created', { roomId: testRoomId });
+
+        broadcastToClients({
+          type: 'private_call_started',
+          call: {
+            privateTopicID: testRoomId,
+            channel: 'TEST',
+            from: testCall.from,
+            to: testCall.to,
+            startTime: testCall.startTime
+          }
+        });
+
+        ws.send(JSON.stringify({
+          type: 'test_room_created',
+          roomId: testRoomId,
+          timestamp: new Date().toISOString()
+        }));
+      }
+      break;
+
+    case 'leave_room':
+      {
+        if (!isValidString(data.roomId)) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid roomId' }));
+          break;
+        }
+        const roomId = data.roomId;
+        leaveRoom(ws, roomId);
+        ws.send(JSON.stringify({
+          type: 'room_left',
+          roomId: roomId,
+          joinedRooms: getClientRooms(ws),
+          timestamp: new Date().toISOString()
+        }));
+      }
+      break;
+
+    case 'get_joined_rooms':
+      // 取得已加入的房間列表
+      {
+        ws.send(JSON.stringify({
+          type: 'joined_rooms_response',
+          rooms: getClientRooms(ws),
+          timestamp: new Date().toISOString()
+        }));
       }
       break;
   }
 }
 
-function getValidDevices() {
-  const devices = Array.from(connectedDevices.values());
-  return devices.filter(device => 
-    device && 
-    device.id && 
-    device.position && 
-    typeof device.position.lat === 'number' &&
-    typeof device.position.lng === 'number'
-  );
-}
 // ==================== 訊息處理函數（舊版 MQTT 已移除） ====================
 // 以下函數已移除（原用於 mezzo/* MQTT topics）：
 // - handleCotMessage    → TAK Server 已停用
@@ -1788,7 +2218,11 @@ function cleanDeviceData(device) {
     streamUrl: device.streamUrl,
     rtspUrl: device.rtspUrl,
     source: device.source,
-    lastUpdate: device.lastUpdate || new Date().toISOString()
+    lastUpdate: device.lastUpdate || new Date().toISOString(),
+    // BWC 執法儀專屬屬性
+    isBWC: device.isBWC || false,
+    streamChannelIndex: device.streamChannelIndex,
+    recording: device.recording
   };
 }
 
@@ -1855,7 +2289,9 @@ function generateDeviceCoT(device) {
 // ==================== Express 中介軟體 ====================
 
 app.use(cors({
-  origin: '*',
+  origin: process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+    : ['http://localhost:5173'],
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -1891,7 +2327,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.get('/devices', (req, res) => {
+app.get('/devices', requireAuth, (req, res) => {
   const validDevices = getValidDevices();
   res.json({
     devices: validDevices,
@@ -1901,7 +2337,7 @@ app.get('/devices', (req, res) => {
 });
 
 
-app.get('/devices/:deviceId', (req, res) => {
+app.get('/devices/:deviceId', requireAuth, (req, res) => {
   const device = connectedDevices.get(req.params.deviceId);
   if (device) {
     res.json(cleanDeviceData(device));
@@ -1910,7 +2346,7 @@ app.get('/devices/:deviceId', (req, res) => {
   }
 });
 
-app.get('/groups', (req, res) => {
+app.get('/groups', requireAuth, (req, res) => {
   const groups = getAllGroups().map(groupName => ({
     name: groupName,
     members: getGroupMembers(groupName).map(deviceId => {
@@ -1926,7 +2362,7 @@ app.get('/groups', (req, res) => {
   });
 });
 
-app.post('/api/rtsp/register', (req, res) => {
+app.post('/api/rtsp/register', requireAuth, (req, res) => {
   // 支援兩種參數名稱：streamUrl (新) 和 rtspUrl (舊，向後相容)
   const { streamId, streamUrl, rtspUrl, position, priority, callsign, group, directStream } = req.body;
   const sourceUrl = streamUrl || rtspUrl;  // 優先使用 streamUrl
@@ -1956,7 +2392,7 @@ app.post('/api/rtsp/register', (req, res) => {
 
     if (useDirectStream) {
       // MJPEG 直接串流，不經過 FFmpeg 轉換
-      console.log(`📷 [Direct Stream] 註冊 MJPEG 直接串流: ${streamId}`);
+ logger.info(`[Direct Stream] 註冊 MJPEG 直接串流: ${streamId}`);
       streamType = 'mjpeg';
 
       device = {
@@ -1979,7 +2415,7 @@ app.post('/api/rtsp/register', (req, res) => {
       };
     } else {
       // RTSP 或需要轉換的串流，經過 FFmpeg
-      console.log(`🎥 [FFmpeg Stream] 註冊並轉換串流: ${streamId}`);
+ logger.info(`[FFmpeg Stream] 註冊並轉換串流: ${streamId}`);
       streamType = isRTSP ? 'rtsp' : 'http';
 
       const streamInfo = streamManager.startStream(streamId, sourceUrl, {
@@ -2015,30 +2451,26 @@ app.post('/api/rtsp/register', (req, res) => {
     // if (takClient && TAK_CONFIG.enabled) {
     //   const cotXml = generateDeviceCoT(device);
     //   takClient.sendCoT(cotXml);
-    //   console.log(`📤 Sent camera CoT to TAK Server: ${streamId}`);
+ // logger.info(`Sent camera CoT to TAK Server: ${streamId}`);
     // }
 
-// 👇👇👇 關鍵修改：暴力發送模式 (跟 debug_sender.js 一樣) 👇👇👇
+    // TAK direct send mode
     if (TAK_CONFIG.enabled) {
         const xmlPayload = generateDeviceCoT(device);
-        
-        console.log(`🚀 [暴力模式] 為 ${streamId} 建立獨立連線...`);
-        
+        logger.info('TAK direct send for stream', { streamId });
+
         const tempSocket = new net.Socket();
-        
-        // ⚠️ 直接連線到 FTS IP，不透過 TAKClient 類別
-        tempSocket.connect(8087, '192.168.254.1', () => {
-            console.log('✅ [暴力模式] 連線成功，發送 XML...');
-            tempSocket.write(xmlPayload + '\n'); // 寫入資料
-            tempSocket.end(); // 發送完馬上斷線
-            console.log('🏁 [暴力模式] 發送完畢，已斷線');
+        tempSocket.connect(TAK_CONFIG.port, TAK_CONFIG.host, () => {
+            logger.debug('TAK direct send connected');
+            tempSocket.write(xmlPayload + '\n');
+            tempSocket.end();
+            logger.debug('TAK direct send completed');
         });
 
         tempSocket.on('error', (err) => {
-            console.error('❌ [暴力模式] 失敗:', err.message);
+            logger.error('TAK direct send failed', { error: err.message });
         });
     }
-    // 👆👆👆 修改結束 👆👆👆
 
     broadcastToClients({
       type: 'device_added',
@@ -2054,7 +2486,7 @@ app.post('/api/rtsp/register', (req, res) => {
       device: device
     });
   } catch (error) {
-    console.error('❌ Register stream error:', error);
+ logger.error('Register stream error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -2062,7 +2494,7 @@ app.post('/api/rtsp/register', (req, res) => {
   }
 });
 
-app.get('/api/streams', (req, res) => {
+app.get('/api/streams', requireAuth, (req, res) => {
   const streams = streamManager.getAllStreams();
   res.json({
     streams: streams,
@@ -2070,7 +2502,7 @@ app.get('/api/streams', (req, res) => {
   });
 });
 
-app.delete('/api/rtsp/:streamId', (req, res) => {
+app.delete('/api/rtsp/:streamId', requireAuth, (req, res) => {
   const { streamId } = req.params;
 
   if (streamManager.stopStream(streamId)) {
@@ -2101,7 +2533,7 @@ app.delete('/api/rtsp/:streamId', (req, res) => {
   }
 });
 
-app.post('/send-cot', (req, res) => {
+app.post('/send-cot', requireAuth, (req, res) => {
   try {
     const cotXml = generateCotXml(req.body);
 
@@ -2120,7 +2552,7 @@ app.post('/send-cot', (req, res) => {
       });
     }
   } catch (error) {
-    console.error('❌ Send CoT error:', error);
+ logger.error('Send CoT error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -2128,7 +2560,7 @@ app.post('/send-cot', (req, res) => {
   }
 });
 
-app.post('/send-message', (req, res) => {
+app.post('/send-message', requireAuth, (req, res) => {
   try {
     const { from, to, text, priority, timestamp } = req.body;
 
@@ -2145,13 +2577,20 @@ app.post('/send-message', (req, res) => {
       timestamp: timestamp || new Date().toISOString(),
     };
 
-    console.log('📨 Sending message:', message);
+    logger.info('Sending message', { from: message.from, to: message.to });
 
     messages.push(message);
 
     if (messages.length > 100) {
       messages.shift();
     }
+
+    // DB: persist message
+    db.query(
+      `INSERT INTO messages (message_id, from_user, to_target, text, priority, source)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [message.id, message.from, message.to, message.text, message.priority, 'web']
+    ).catch(err => logger.error('Message insert error', { error: err.message }));
 
     broadcastToClients({
       type: 'message',
@@ -2173,7 +2612,7 @@ app.post('/send-message', (req, res) => {
 </event>`;
 
       takClient.sendCoT(cotMessage);
-      console.log('📤 Message sent to TAK Server');
+ logger.info('Message sent to TAK Server');
     }
 
     res.json({
@@ -2181,12 +2620,12 @@ app.post('/send-message', (req, res) => {
       message: message,
     });
   } catch (error) {
-    console.error('❌ Send message error:', error);
+ logger.error('Send message error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/messages', (req, res) => {
+app.get('/messages', requireAuth, (req, res) => {
   const { deviceId, group, limit = 50 } = req.query;
 
   let filteredMessages = messages;
@@ -2218,9 +2657,9 @@ app.get('/messages', (req, res) => {
   });
 });
 
-app.post('/voice-message', (req, res) => {
+app.post('/voice-message', requireAuth, (req, res) => {
   const { message } = req.body;
-  console.log('🎤 Voice command:', message);
+  logger.info('Voice command received');
 
   let command = null;
 
@@ -2238,13 +2677,13 @@ app.post('/voice-message', (req, res) => {
 
   if (command) {
     // 舊版 MQTT 攝影機控制已移除
-    console.log(`📹 Voice command recognized: ${command} (MQTT disabled)`);
+ logger.info(`Voice command recognized: ${command} (MQTT disabled)`);
 
     // 保留 Python 腳本執行（如有需要）
     // try {
     //   exec(`python mqtt_publish.py ${command}`);
     // } catch (error) {
-    //   console.error('Python script error:', error);
+ // logger.error('Python script error:', error);
     // }
   }
 
@@ -2255,7 +2694,7 @@ app.post('/voice-message', (req, res) => {
   });
 });
 
-app.get('/api/tak/status', (req, res) => {
+app.get('/api/tak/status', requireAuth, (req, res) => {
   if (takClient) {
     res.json(takClient.getStatus());
   } else {
@@ -2266,7 +2705,7 @@ app.get('/api/tak/status', (req, res) => {
 // ==================== PTT MQTT API ====================
 // 添加到 server.js 中的 app.get('/api/tak/status'...) 之後
 
-app.post('/ptt/publish', (req, res) => {
+app.post('/ptt/publish', requireAuth, (req, res) => {
   try {
     const { topic, message, encoding, transcript } = req.body;
 
@@ -2277,7 +2716,7 @@ app.post('/ptt/publish', (req, res) => {
       });
     }
 
-    console.log(`📤 Publishing to PTT MQTT: ${topic}`, transcript ? `with transcript: "${transcript}"` : '');
+    logger.info(`Publishing to PTT MQTT: ${topic}`);
 
     // 處理二進位訊息
     let buffer;
@@ -2326,20 +2765,20 @@ app.post('/ptt/publish', (req, res) => {
         pttState.broadcastedTranscripts.delete(messageKey);
       }, 5000);
 
-      console.log(`📝 Transcript broadcasted: ${uuid} → "${transcript}" (with ${audioData.length} bytes audio)`);
+      logger.info('Transcript broadcasted', { uuid, audioBytes: audioData.length });
     }
 
     // 發布到 PTT MQTT
     pttMqttClient.publish(topic, buffer, (err) => {
       if (err) {
-        console.error('❌ PTT MQTT publish error:', err);
+ logger.error('PTT MQTT publish error:', err);
         return res.status(500).json({
           success: false,
           error: err.message
         });
       }
 
-      console.log(`✅ PTT MQTT published: ${topic}`);
+ logger.info(`PTT MQTT published: ${topic}`);
       res.json({
         success: true,
         topic: topic,
@@ -2348,7 +2787,7 @@ app.post('/ptt/publish', (req, res) => {
       });
     });
   } catch (error) {
-    console.error('❌ PTT publish error:', error);
+ logger.error('PTT publish error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -2357,7 +2796,7 @@ app.post('/ptt/publish', (req, res) => {
 });
 
 // ===== 語音訊息端點 (用於通訊面板的語音訊息功能) =====
-app.post('/ptt/voice-message', (req, res) => {
+app.post('/ptt/voice-message', requireAuth, (req, res) => {
   try {
     const { channel, from, to, text, audioData, transcript } = req.body;
 
@@ -2368,7 +2807,7 @@ app.post('/ptt/voice-message', (req, res) => {
       });
     }
 
-    console.log(`💬 Voice message from ${from} to ${to} on channel ${channel}`);
+ logger.info(`Voice message from ${from} to ${to} on channel ${channel}`);
 
     // 建立語音訊息物件
     const voiceMessage = {
@@ -2387,14 +2826,14 @@ app.post('/ptt/voice-message', (req, res) => {
     // 廣播給所有 WebSocket 客戶端
     broadcastToClients(voiceMessage);
 
-    console.log(`✅ Voice message broadcasted: ${from} → ${to}`);
+ logger.info(`Voice message broadcasted: ${from} → ${to}`);
 
     res.json({
       success: true,
       messageId: voiceMessage.message.id
     });
   } catch (error) {
-    console.error('❌ Voice message error:', error);
+ logger.error('Voice message error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -2403,7 +2842,7 @@ app.post('/ptt/voice-message', (req, res) => {
 });
 
 // PTT 狀態查詢
-app.get('/ptt/status', (req, res) => {
+app.get('/ptt/status', requireAuth, (req, res) => {
   res.json({
     connected: pttMqttClient.connected,
     broker: PTT_MQTT_CONFIG.broker,
@@ -2414,7 +2853,7 @@ app.get('/ptt/status', (req, res) => {
 });
 
 // PTT 活躍使用者列表
-app.get('/ptt/users', (req, res) => {
+app.get('/ptt/users', requireAuth, (req, res) => {
   const users = Array.from(pttState.activeUsers.entries()).map(([uuid, info]) => ({
     uuid,
     channel: info.channel,
@@ -2429,7 +2868,7 @@ app.get('/ptt/users', (req, res) => {
 });
 
 // PTT SOS 警報列表
-app.get('/ptt/sos', (req, res) => {
+app.get('/ptt/sos', requireAuth, (req, res) => {
   const alerts = Array.from(pttState.sosAlerts.values());
   
   res.json({
@@ -2439,17 +2878,23 @@ app.get('/ptt/sos', (req, res) => {
 });
 
 // 清除 SOS 警報
-app.delete('/ptt/sos/:id', (req, res) => {
+app.delete('/ptt/sos/:id', requireAuth, (req, res) => {
   const { id } = req.params;
   
   if (pttState.sosAlerts.has(id)) {
     pttState.sosAlerts.delete(id);
-    
+
+    // DB: mark SOS alert as cleared
+    db.query(
+      `UPDATE sos_alerts SET status='cleared', resolved_at=NOW() WHERE alert_id=$1`,
+      [id]
+    ).catch(err => logger.error('SOS clear error', { error: err.message }));
+
     broadcastToClients({
       type: 'sos_cleared',
       id: id
     });
-    
+
     res.json({ success: true });
   } else {
     res.status(404).json({
@@ -2468,7 +2913,7 @@ setInterval(() => {
 
   const devices = getValidDevices();
   if (devices.length > 0) {
-    console.log(`💓 Sending heartbeat for ${devices.length} devices...`);
+ logger.info(`Sending heartbeat for ${devices.length} devices...`);
     devices.forEach(device => {
       // 確保它是活躍狀態才發送
       if (device.status === 'active') {
@@ -2520,74 +2965,85 @@ setInterval(() => {
 //       // 使用你程式碼裡現有的函數轉成 XML
 //       const xml = generateDeviceCoT(fakeDevice); 
 //       takClient.sendCoT(xml);
-//       console.log(`📤 模擬訊號已發送至 WinTAK: ${fakeDevice.callsign}`);
+// logger.info(`模擬訊號已發送至 WinTAK: ${fakeDevice.callsign}`);
 //   } else {
-//       console.log('⚠️ TAK Server 未連線，無法發送模擬訊號');
+// logger.info('TAK Server 未連線，無法發送模擬訊號');
 //   }
 //   // =======================================
 
 //   // 每 3 秒更新一次位置
 // }, 3000);
 
-// console.log('🛠️ Simulation Mode: Active (Generating fake friendly unit)');
+// logger.info('Simulation Mode: Active (Generating fake friendly unit)');
 // // ============================================================
 
 // ==================== 啟動服務器 ====================
 app.listen(HTTP_PORT, '0.0.0.0', () => {
-  console.log('');
-  console.log('╔═══════════════════════════════════════════════════════════╗');
-  console.log('║   Mezzo TAK Integration Server - COMPLETE EDITION        ║');
-  console.log('╚═══════════════════════════════════════════════════════════╝');
-  console.log('');
-  console.log('🚀 服務狀態:');
-  console.log(`   HTTP Server:  http://0.0.0.0:${HTTP_PORT}`);
-  console.log(`   WebSocket:    ws://0.0.0.0:${WS_PORT}`);
-  console.log(`   PTT MQTT:     ${PTT_MQTT_CONFIG.broker}`);
-  console.log(`   TAK Server:   ${TAK_CONFIG.enabled ? `✅ ${TAK_CONFIG.host}:${TAK_CONFIG.port}` : '❌ Disabled'}`);
-  console.log(`   RTSP Streams: ${STREAM_CONFIG.enabled ? '✅ Enabled' : '❌ Disabled'}`);
-  console.log('');
-  console.log('📋 功能:');
-  console.log('   ✅ PTT 執法儀語音對講');
-  console.log('   ✅ 訊息系統 (WebSocket)');
-  console.log('   ✅ 群組訊息路由');
-  console.log('   ✅ 設備群組管理');
-  console.log('   ✅ RTSP 攝像頭註冊與串流');
-  console.log('');
-  console.log('📋 主要 API 端點:');
-  console.log('   GET  /health                - 系統健康檢查');
-  console.log('   GET  /devices               - 所有設備列表');
-  console.log('   GET  /groups                - 所有群組列表');
-  console.log('   POST /api/rtsp/register     - 註冊 RTSP 攝像頭');
-  console.log('   POST /send-message          - 發送訊息');
-  console.log('   GET  /messages              - 訊息歷史');
-  console.log('');
+ logger.info('');
+ logger.info('╔═══════════════════════════════════════════════════════════╗');
+ logger.info('║ Mezzo TAK Integration Server - COMPLETE EDITION ║');
+ logger.info('╚═══════════════════════════════════════════════════════════╝');
+ logger.info('');
+ logger.info('服務狀態:');
+ logger.info(`HTTP Server: http://0.0.0.0:${HTTP_PORT}`);
+ logger.info(`WebSocket: ws://0.0.0.0:${WS_PORT}`);
+ logger.info(`PTT MQTT: ${PTT_MQTT_CONFIG.broker}`);
+ logger.info(`TAK Server: ${TAK_CONFIG.enabled ?` ${TAK_CONFIG.host}:${TAK_CONFIG.port}` : ' Disabled'}`);
+ logger.info(`RTSP Streams: ${STREAM_CONFIG.enabled ? ' Enabled' : ' Disabled'}`);
+ logger.info('');
+ logger.info('功能:');
+ logger.info('PTT 執法儀語音對講');
+ logger.info('訊息系統 (WebSocket)');
+ logger.info('群組訊息路由');
+ logger.info('設備群組管理');
+ logger.info('RTSP 攝像頭註冊與串流');
+ logger.info('');
+ logger.info('主要 API 端點:');
+ logger.info('GET /health - 系統健康檢查');
+ logger.info('GET /devices - 所有設備列表');
+ logger.info('GET /groups - 所有群組列表');
+ logger.info('POST /api/rtsp/register - 註冊 RTSP 攝像頭');
+ logger.info('POST /send-message - 發送訊息');
+ logger.info('GET /messages - 訊息歷史');
+ logger.info('');
 });
 
-console.log(`📡 WebSocket Server listening on port ${WS_PORT}`);
+logger.info(`WebSocket Server listening on port ${WS_PORT}`);
 
 // ==================== 優雅關閉 ====================
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-function shutdown() {
-  console.log('\n⏹️  Shutting down gracefully...');
+async function shutdown() {
+  logger.info('Shutting down gracefully...');
+
+  // Flush remaining GPS positions
+  try { await gpsBatcher.stop(); } catch (e) { logger.error('GPS batcher stop error', { error: e.message }); }
 
   streamManager.stopAllStreams();
 
   wss.close(() => {
-    console.log('✅ WebSocket server closed');
+    logger.info('WebSocket server closed');
   });
 
   pttMqttClient.end(false, () => {
-    console.log('✅ PTT MQTT client disconnected');
+    logger.info('PTT MQTT client disconnected');
   });
 
   if (takClient) {
     takClient.disconnect();
-    console.log('✅ TAK client disconnected');
+    logger.info('TAK client disconnected');
   }
 
-  console.log('👋 Goodbye!\n');
+  // Close Redis and PG connections
+  if (redis) {
+    try { await redis.quit(); } catch (e) { logger.error('Redis quit error', { error: e.message }); }
+  }
+  if (db.pool) {
+    try { await db.pool.end(); } catch (e) { logger.error('PG pool end error', { error: e.message }); }
+  }
+
+  logger.info('Goodbye!');
   process.exit(0);
 }

@@ -2,6 +2,7 @@
 // 主要修改: 添加 useEffect 來同步視訊流到本地視訊元素
 
 import { useState, useEffect, useRef } from 'react';
+import { getAccessToken } from '../auth/authService';
 import {
     Phone,
     PhoneOff,
@@ -42,9 +43,9 @@ interface MediaSource {
     controlledBy: string;
 }
 
-const SIGNALING_SERVER = 'http://localhost:3001';
+const SIGNALING_SERVER = import.meta.env.VITE_SIGNALING_URL || 'http://localhost:3001';
 const ROOM_ID = 'police-team-call';
-const DEFAULT_STREAM_URL = 'http://220.135.209.219:8088/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=1';
+const DEFAULT_STREAM_URL = `http://${import.meta.env.VITE_NVR_HOST || 'localhost:8088'}/mjpeg_stream.cgi?Auth=${import.meta.env.VITE_NVR_AUTH || ''}&ch=1`;
 
 const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
     const [isInCall, setIsInCall] = useState(false);
@@ -106,7 +107,16 @@ const Communication = ({ currentUser, teamMembers }: CommunicationProps) => {
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionAttempts: 5,
-            timeout: 5000,  // 5秒超時
+            timeout: 5000,
+        });
+
+        // Attach auth token asynchronously for signaling server
+        getAccessToken().then(token => {
+            if (token && socketRef.current) {
+                socketRef.current.io.opts.extraHeaders = {
+                    Authorization: `Bearer ${token}`,
+                };
+            }
         });
 
         socketRef.current.on('connect', () => {

@@ -18,7 +18,8 @@ import {
   Volume2,
   Maximize,
   Disc2,
-  X
+  X,
+  Loader2
 } from 'lucide-react';
 import CameraMap from './assets/CameraMap';
 import VoiceControl from './assets/VoiceControl';
@@ -26,24 +27,42 @@ import Playback from './assets/Playback';
 import Communication from './assets/Communication';
 import Device from './assets/Device';
 import GPSTracking from './assets/GPSTracking';
+import { AuthProvider } from './auth/AuthContext';
+import { useAuth } from './auth/useAuth';
 
 import type { TeamMember, Transcript } from './types';
 
 // ---- LoginPage ----
-const LoginPage = ({ onLogin }: { onLogin: (name: string, unit: string) => void }) => {
-  const [inputName, setInputName] = useState('');
-  const [inputUnit, setInputUnit] = useState('Patrol Unit 7A');
+const LoginPage = ({ onLogin }: { onLogin: (name: string) => void }) => {
+  const { login } = useAuth();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-
-  const handleLogin = () => {
-    if (!inputName.trim() || !inputUnit.trim()) {
-      setError('Please enter both name and unit');
+  const handleLogin = async () => {
+    if (!username.trim() || !password.trim()) {
+      setError('Please enter username and password');
       return;
     }
-    onLogin(inputName.trim(), inputUnit.trim());
+    setLoading(true);
+    setError('');
+    try {
+      await login(username.trim(), password.trim());
+      onLogin(username.trim());
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Login failed';
+      if (msg === 'NEW_PASSWORD_REQUIRED') {
+        setError('Password change required. Please contact administrator.');
+      } else if (msg.includes('Incorrect username or password')) {
+        setError('Incorrect username or password');
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
-
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-900 to-blue-800">
@@ -55,26 +74,28 @@ const LoginPage = ({ onLogin }: { onLogin: (name: string, unit: string) => void 
         <h2 className="text-xl font-semibold text-gray-700 mb-6 text-center">Welcome</h2>
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Enter Your Name</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Username</label>
             <input
               type="text"
-              value={inputName}
-              onChange={(e) => setInputName(e.target.value)}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              placeholder="e.g., Rodriguez"
+              placeholder="Enter your username"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               autoFocus
+              disabled={loading}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Enter Your Unit</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
             <input
-              type="text"
-              value={inputUnit}
-              onChange={(e) => setInputUnit(e.target.value)}
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              placeholder="e.g., Patrol Unit 7A"
+              placeholder="Enter your password"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              disabled={loading}
             />
           </div>
           {error && (
@@ -83,8 +104,13 @@ const LoginPage = ({ onLogin }: { onLogin: (name: string, unit: string) => void 
               {error}
             </div>
           )}
-          <button onClick={handleLogin} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition">
-            Enter System
+          <button
+            onClick={handleLogin}
+            disabled={loading}
+            className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+            {loading ? 'Logging in...' : 'Enter System'}
           </button>
         </div>
       </div>
@@ -390,7 +416,7 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript, setActiveMenu }: { t
             <div className="bg-indigo-900 aspect-video flex items-center justify-center relative">
               <img
                 ref={imgRef}
-                src="http://118.163.141.80:80/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=0"
+                src={`${import.meta.env.VITE_BWC_STREAM_URL || 'http://localhost:80/mjpeg_stream.cgi'}?Auth=${import.meta.env.VITE_BWC_STREAM_AUTH || ''}&ch=0`}
                 alt="Live Feed"
                 className="w-full h-full object-cover"
                 crossOrigin="anonymous"
@@ -531,11 +557,10 @@ const Dashboard = ({ teamStatus, transcripts, onTranscript, setActiveMenu }: { t
   );
 };
 
-// ---- App Root ----
-export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+// ---- App Content (after authentication) ----
+function AppContent() {
+  const { isAuthenticated, isLoading, user, logout } = useAuth();
   const [userName, setUserName] = useState('');
-  const [userUnit, setUserUnit] = useState('');
   const [activeMenu, setActiveMenu] = useState('Dashboard');
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [teamStatus, setTeamStatus] = useState<TeamMember[]>([
@@ -546,21 +571,26 @@ export default function App() {
     { id: '5', name: 'Officer Ramos', unit: 'Patrol Unit 2D', status: 'Active', color: 'green' },
   ]);
 
-
-  const handleLogin = (name: string, unit: string) => {
+  const handleLogin = (name: string) => {
     setUserName(name);
-    setUserUnit(unit);
-    setIsLoggedIn(true);
-    setTeamStatus((prev) => [{ id: '1', name, unit, status: 'Live', color: 'red' }, ...prev.slice(1)]);
+    setTeamStatus((prev) => [{ id: '1', name, unit: 'Active', status: 'Live', color: 'red' }, ...prev.slice(1)]);
   };
 
   const handleTranscript = (entry: Transcript) => {
     setTranscripts((prev) => [entry, ...prev]);
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+      </div>
+    );
+  }
 
-  if (!isLoggedIn) return <LoginPage onLogin={handleLogin} />;
+  if (!isAuthenticated) return <LoginPage onLogin={handleLogin} />;
 
+  const displayName = userName || user?.username || 'User';
 
   return (
     <div className="flex h-screen bg-gray-50 relative">
@@ -578,10 +608,14 @@ export default function App() {
         <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-2">
             <UserCircle className="w-4 h-4" />
-            <span className="text-sm">
-              {userName} • {userUnit}
-            </span>
+            <span className="text-sm">{displayName}</span>
           </div>
+          <button
+            onClick={logout}
+            className="text-xs bg-indigo-700 hover:bg-indigo-600 px-3 py-1 rounded transition"
+          >
+            Logout
+          </button>
         </div>
       </div>
 
@@ -601,12 +635,12 @@ export default function App() {
         {(activeMenu === 'Voice Communication' ||
           activeMenu === 'Team Management') && (
             <Communication
-              currentUser={{ name: userName, unit: userUnit }}
+              currentUser={{ name: displayName, unit: user?.groups?.[0] || 'Active' }}
               teamMembers={teamStatus}
             />
           )}
 
-        {activeMenu === 'GPS Tracking' && <GPSTracking userName={userName} />}
+        {activeMenu === 'GPS Tracking' && <GPSTracking userName={displayName} />}
 
         {activeMenu === 'Device Management' && <Device />}
 
@@ -627,6 +661,15 @@ export default function App() {
             </div>
           )}
       </div>
-    </div> // ← 這個是原本少掉的最外層 div
+    </div>
+  );
+}
+
+// ---- App Root ----
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

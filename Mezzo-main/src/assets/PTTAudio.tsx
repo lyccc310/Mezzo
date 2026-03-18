@@ -18,6 +18,7 @@ import {
     Loader2
 } from 'lucide-react';
 import { WebRTCManager } from '../utils/WebRTCManager';
+import { authFetch } from '../config/api';
 
 interface PTTAudioProps {
     deviceId: string;
@@ -413,7 +414,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             combined.set(uuidBuffer, 32);
             combined.set(dataBytes, 160);
 
-            const response = await fetch(`${API_BASE}/ptt/publish`, {
+            const response = await authFetch(`${API_BASE}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -456,7 +457,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             combined.set(uuidBuffer, 32);
             combined.set(dataBytes, 160);
 
-            await fetch(`${API_BASE}/ptt/publish`, {
+            await authFetch(`${API_BASE}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -574,7 +575,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             combined.set(uuidBuffer, 32);
             combined.set(dataBytes, 160);
 
-            await fetch(`${API_BASE}/ptt/publish`, {
+            await authFetch(`${API_BASE}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -617,7 +618,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             combined.set(uuidBuffer, 32);
             combined.set(dataBytes, 160);
 
-            const response = await fetch(`${API_BASE}/ptt/publish`, {
+            const response = await authFetch(`${API_BASE}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -668,7 +669,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
             combined.set(uuidBuffer, 32);
             combined.set(dataBytes, 160);
 
-            await fetch(`${API_BASE}/ptt/publish`, {
+            await authFetch(`${API_BASE}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

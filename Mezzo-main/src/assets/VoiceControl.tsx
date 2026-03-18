@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { Mic } from 'lucide-react';
+import { authFetch, API_BASE_URL } from '../config/api';
 
 interface Transcript {
   time: string;
@@ -57,7 +58,7 @@ const VoiceControl = ({ onTranscript }: VoiceControlProps) => {
   const sendToServer = async (text: string) => {
     console.log('[VoiceControl] Sending to server:', text);
     try {
-      const res = await fetch('http://localhost:4000/voice-message', {
+      const res = await authFetch(`${API_BASE_URL}/voice-message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),

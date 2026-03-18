@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Radio, Send, MapPin, AlertTriangle, Volume2, Wifi, WifiOff } from 'lucide-react';
+import { authFetch } from '../config/api';
+import { getAccessToken } from '../auth/authService';
 
 interface Message {
     text: string;
@@ -15,7 +17,7 @@ interface Stats {
 
 const PTTCommunication = () => {
     // 狀態管理
-    const [serverUrl, setServerUrl] = useState('http://localhost:4000');
+    const [serverUrl, setServerUrl] = useState(import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000');
     const [deviceId, setDeviceId] = useState('TEST-USER-001');
     const [channel, setChannel] = useState('channel1');
     const [messageText, setMessageText] = useState('');
@@ -79,7 +81,7 @@ const PTTCommunication = () => {
         const message = createPTTMessage(tag, deviceId, data);
 
         try {
-            const response = await fetch(`${serverUrl}/ptt/publish`, {
+            const response = await authFetch(`${serverUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ topic, message, encoding: 'binary' })
@@ -148,11 +150,13 @@ const PTTCommunication = () => {
     };
 
     // 連接 WebSocket
-    const connectWebSocket = () => {
+    const connectWebSocket = async () => {
         const wsUrl = serverUrl.replace('http', 'ws').replace(':4000', ':4001');
         addLog(`正在連接 WebSocket: ${wsUrl}`, 'info');
 
-        const ws = new WebSocket(wsUrl);
+        const token = await getAccessToken();
+        const wsUrlWithAuth = token ? `${wsUrl}?token=${encodeURIComponent(token)}` : wsUrl;
+        const ws = new WebSocket(wsUrlWithAuth);
         wsRef.current = ws;
 
         ws.onopen = () => {

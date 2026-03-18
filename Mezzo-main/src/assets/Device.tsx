@@ -1,5 +1,6 @@
 // src/assets/Device.tsx
 import { useEffect, useState } from 'react';
+import { authFetch, API_BASE_URL } from '../config/api';
 import {
   Server,
   HardDrive,
@@ -64,16 +65,16 @@ const SERVERS: NvrServer[] = [
     name: 'Guardeye NVR',
     type: 'nvr',
     apiBase: '/nvr',
-    displayHost: '220.135.209.219:8088',
-    auth: 'QWRtaW46MTIzNA==',
+    displayHost: import.meta.env.VITE_NVR_HOST || 'localhost:8088',
+    auth: import.meta.env.VITE_NVR_AUTH || '',
     note: 'Messo-NVR',
   },
   {
     id: 'atak',
     name: 'ATAK Server',
     type: 'tak',
-    apiBase: 'http://localhost:4000',
-    displayHost: 'localhost:4000',
+    apiBase: import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000',
+    displayHost: (import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000').replace(/^https?:\/\//, ''),
     note: 'GPS Tracking',
   },
 ];
@@ -168,7 +169,7 @@ const Device = () => {
     setLoadingCamera(true);
     setError(null);
     try {
-      const res = await fetch('http://localhost:4000/devices');
+      const res = await authFetch(`${API_BASE_URL}/devices`);
       if (!res.ok) throw new Error(`Failed to fetch devices: ${res.status}`);
 
       const data = await res.json();
@@ -201,7 +202,7 @@ const Device = () => {
 
     try {
       // 統一使用後端的串流註冊 API，支援 RTSP 和 HTTP/MJPEG
-      const response = await fetch('http://localhost:4000/api/rtsp/register', {
+      const response = await authFetch(`${API_BASE_URL}/api/rtsp/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -489,8 +490,8 @@ const Device = () => {
                         required
                         placeholder={
                           formData.streamType === 'rtsp'
-                            ? 'rtsp://admin:1234@192.168.1.100:554/stream1'
-                            : 'http://118.163.141.80:80/mjpeg_stream.cgi?Auth=QWRtaW46MTIzNA==&ch=0'
+                            ? 'rtsp://user:pass@host:554/stream1'
+                            : 'http://host:port/mjpeg_stream.cgi?Auth=xxx&ch=0'
                         }
                         value={formData.streamUrl}
                         onChange={(e) =>

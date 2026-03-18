@@ -5,22 +5,59 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { CognitoJwtVerifier } = require('aws-jwt-verify');
 
 const app = express();
-app.use(cors());
+
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+    : ['http://localhost:5173'];
+
+// JWT 驗證器（有設定 Cognito 才啟用）
+const AUTH_ENABLED = !!(process.env.COGNITO_USER_POOL_ID && process.env.COGNITO_CLIENT_ID);
+let jwtVerifier = null;
+if (AUTH_ENABLED) {
+    jwtVerifier = CognitoJwtVerifier.create({
+        userPoolId: process.env.COGNITO_USER_POOL_ID,
+        clientId: process.env.COGNITO_CLIENT_ID,
+        tokenUse: 'access',
+    });
+    console.log('🔒 Signaling server: JWT auth enabled');
+} else {
+    console.log('⚠️  Signaling server: running without auth (dev mode)');
+}
+
+app.use(cors({ origin: CORS_ORIGIN }));
 
 const server = http.createServer(app);
 
 // 配置 Socket.IO with CORS
 const io = new Server(server, {
     cors: {
-        origin: "*", // 開發環境允許所有來源
+        origin: CORS_ORIGIN,
         methods: ["GET", "POST"],
         credentials: true
     },
     transports: ['websocket', 'polling'],
     pingTimeout: 60000,
     pingInterval: 25000
+});
+
+// JWT 驗證中介層
+io.use(async (socket, next) => {
+    if (!AUTH_ENABLED) return next();
+
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    if (!token) {
+        return next(new Error('Authentication required'));
+    }
+    try {
+        const payload = await jwtVerifier.verify(token);
+        socket.data.username = payload.username || payload['cognito:username'];
+        next();
+    } catch {
+        next(new Error('Invalid or expired token'));
+    }
 });
 
 // 存儲房間和用戶信息
@@ -256,9 +293,7 @@ app.get('/rooms', (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 server.listen(PORT, () => {
-    console.log('🚀 信令伺服器啟動在 port', PORT);
-    console.log('📡 WebSocket 端點: ws://localhost:' + PORT);
-    console.log('🏥 健康檢查: http://localhost:' + PORT + '/health');
+    console.log(`Signaling server started on port ${PORT}`);
 });
 
 // 優雅關閉

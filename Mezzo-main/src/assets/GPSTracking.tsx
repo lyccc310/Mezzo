@@ -2,25 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import CameraMap from './CameraMap';
 import VideoPlayer from './VideoPlayer';
 import PTTAudio from './PTTAudio';
-import { getFullStreamUrl } from '../config/api';
+import { getFullStreamUrl, authFetch } from '../config/api';
+import { getAccessToken } from '../auth/authService';
 import { Device, Message } from '../types';
-import { MapPin, Video, Wifi, Activity, Clock, Send, Users, MessageSquare, Radio, AlertCircle, Mic, Navigation } from 'lucide-react';
+import { MapPin, Video, Wifi, Activity, Clock, Send, Users, MessageSquare, Radio, AlertCircle, Mic, Navigation, Shield, Phone, PhoneOff, Check, X, DoorOpen, DoorClosed, LogIn, LogOut, RefreshCw } from 'lucide-react';
 
 // ===== 配置 =====
 const API_CONFIG = {
-    baseUrl: (() => {
-        const hostname = window.location.hostname;
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return 'http://localhost:4000';
-        }
-        return `http://${hostname}:4000`;
-    })(),
+    baseUrl: import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000',
 };
 
-const WS_URL = API_CONFIG.baseUrl.replace('http', 'ws').replace(':4000', ':4001');
-
-console.log('[GPSTracking] API Config:', API_CONFIG.baseUrl);
-console.log('[GPSTracking] WebSocket:', WS_URL);
+const WS_URL = import.meta.env.VITE_WS_URL || API_CONFIG.baseUrl.replace('http', 'ws').replace(':4000', ':4001');
 
 interface GPSTrackingProps {
     userName?: string;
@@ -62,10 +54,25 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     const [pttStatusType, setPttStatusType] = useState<'success' | 'error' | 'info'>('info');
     const [selectedPTTFunction, setSelectedPTTFunction] = useState('');
 
+    // ===== 組長仲裁控制狀態 =====
+    const [arbiterMode, setArbiterMode] = useState(true);
+    const [pendingSpeechRequests, setPendingSpeechRequests] = useState<{ uuid: string; timestamp: string }[]>([]);
+    const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);
+    const [allowedSpeakers, setAllowedSpeakers] = useState<string[]>([]);
+    const [showArbiterPanel, setShowArbiterPanel] = useState(false);
+
+    // ===== 私人通話監控狀態 =====
+    const [activePrivateCalls, setActivePrivateCalls] = useState<{ privateTopicID: string; channel: string; from: string; to: string; startTime: string }[]>([]);
+    const [joinedRooms, setJoinedRooms] = useState<Set<string>>(new Set());
+
     // ===== 使用 useRef 保存 WebSocket 和重連計時器 =====
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
     const reconnectAttemptsRef = useRef(0);
+
+    // ===== 音訊串流播放（持久 AudioContext + 排程播放）=====
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const audioNextTimeRef = useRef<number>(0);
 
     // ===== 提取設備群組 =====
     const deviceGroups = Array.from(
@@ -90,6 +97,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
     // ===== PTT 功能列表 =====
     const pttFunctions = [
         { value: '', label: '請選擇 PTT 功能...' },
+        { value: 'arbiter', label: '組長仲裁控制' },
         { value: 'gps', label: 'GPS 位置發送' },
         { value: 'sos', label: 'SOS 緊急警報' },
         { value: 'broadcast', label: '廣播訊息' },
@@ -129,7 +137,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
             const tag = 'TEXT_MESSAGE'; // 自定義 tag 用於文字訊息
             const message = createPTTMessage(tag, pttDeviceId, text);
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+            const response = await authFetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ topic, message, encoding: 'binary' })
@@ -156,7 +164,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
             const data = `${pttDeviceId},${sendLat},${sendLon}`;
             const message = createPTTMessage('GPS', pttDeviceId, data);
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+            const response = await authFetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ topic, message, encoding: 'binary' })
@@ -191,7 +199,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
             const data = `${sosLat},${sosLon}`;
             const message = createPTTMessage('SOS', pttDeviceId, data);
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+            const response = await authFetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ topic, message, encoding: 'binary' })
@@ -230,7 +238,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
             const topic = `/WJI/PTT/${pttChannel}/CHANNEL_ANNOUNCE`;
             const message = createPTTMessage('BROADCAST', pttDeviceId, broadcastMsg);
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+            const response = await authFetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ topic, message, encoding: 'binary' })
@@ -267,7 +275,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
             const tag = isRecording ? 'MARK_STOP' : 'MARK_START';
             const message = createPTTMessage(tag, pttDeviceId, '');
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+            const response = await authFetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ topic, message, encoding: 'binary' })
@@ -474,7 +482,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                 requestBody.transcript = transcript;
             }
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
+            const response = await authFetch(`${API_CONFIG.baseUrl}/ptt/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(requestBody)
@@ -494,70 +502,75 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
         }
     };
 
-    // ===== 音訊播放函數 =====
+    // ===== 音訊串流播放函數 =====
+    // 使用持久 AudioContext + 排程播放，讓多個小封包無縫銜接
     const handleAudioPlayback = async (packet: any) => {
         try {
-            console.log('🔊 Playing audio from:', packet.from, 'Type:', packet.type);
+            if (packet.from === pttDeviceId) return;
 
-            // 如果是自己發送的，不播放音訊（避免聽到自己的聲音）
-            if (packet.from === pttDeviceId) {
-                console.log('⏭️ Skipping own audio playback');
-                // 不創建訊息，因為 ptt_transcript 會處理帶有文字的訊息
-                // 避免重複
-                return;
-            }
-
-            // 解碼 base64 音訊數據
-            const audioData = atob(packet.audioData);
-            const audioBytes = new Uint8Array(audioData.length);
-            for (let i = 0; i < audioData.length; i++) {
-                audioBytes[i] = audioData.charCodeAt(i);
-            }
-
-            // 創建 Blob 並播放 - 指定完整的 MIME type
-            const audioBlob = new Blob([audioBytes], { type: 'audio/webm;codecs=opus' });
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-
-            // 播放音訊
-            audio.play().then(() => {
-                console.log('✅ Audio playing');
-                showPTTStatus(`🔊 正在播放來自 ${packet.from} 的語音`, 'info');
-            }).catch(err => {
-                console.error('❌ Audio play error:', err);
-                // 嘗試使用不同的 MIME type
-                console.log('🔄 Trying fallback audio format...');
-                const fallbackBlob = new Blob([audioBytes], { type: 'audio/ogg;codecs=opus' });
-                const fallbackUrl = URL.createObjectURL(fallbackBlob);
-                const fallbackAudio = new Audio(fallbackUrl);
-
-                fallbackAudio.play().then(() => {
-                    console.log('✅ Audio playing (fallback format)');
-                    showPTTStatus(`🔊 正在播放來自 ${packet.from} 的語音`, 'info');
-                }).catch(err2 => {
-                    console.error('❌ Audio play error (fallback):', err2);
-                    showPTTStatus('❌ 音訊播放失敗 - 格式不支援', 'error');
-                    URL.revokeObjectURL(fallbackUrl);
-                });
-
-                fallbackAudio.onended = () => {
-                    URL.revokeObjectURL(fallbackUrl);
+            // 通訊面板記錄（每個來源每 3 秒只記一次，避免洗版）
+            const msgKey = `audio-${packet.from}-${packet.type}`;
+            const audioSize = packet.audioData ? Math.round(packet.audioData.length * 3 / 4) : 0;
+            setMessages(prev => {
+                const recent = prev.find(m => m.id === msgKey);
+                if (recent) return prev; // 已有記錄，不重複
+                const msg: Message = {
+                    id: msgKey,
+                    from: packet.from,
+                    to: packet.type === 'speech'
+                        ? `group:${packet.channel || pttChannel}`
+                        : `room:${packet.room || packet.to}`,
+                    text: packet.type === 'speech'
+                        ? `🔊 群組語音廣播中...`
+                        : `📞 私人通話語音中...`,
+                    timestamp: packet.timestamp || new Date().toISOString(),
+                    priority: 3
                 };
+                return [...prev, msg];
             });
+            // 3 秒後移除 key 讓下次可以再記錄
+            setTimeout(() => {
+                setMessages(prev => prev.filter(m => m.id !== msgKey));
+            }, 3000);
 
-            // 清理資源
-            audio.onended = () => {
-                URL.revokeObjectURL(audioUrl);
-                console.log('✅ Audio playback finished');
-            };
+            // 解碼 base64
+            const raw = atob(packet.audioData);
+            const bytes = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
-            // 不在這裡創建訊息，因為 ptt_transcript 會處理
-            // 如果有文字轉錄，會由 ptt_transcript 處理
-            // 避免重複訊息
+            if (bytes.length === 0) return;
+
+            // 取得或建立持久 AudioContext (8kHz mono)
+            const PCM_RATE = 8000;
+            if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+                audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: PCM_RATE });
+                audioNextTimeRef.current = 0;
+            }
+            const ctx = audioCtxRef.current;
+            if (ctx.state === 'suspended') await ctx.resume();
+
+            // 16-bit signed PCM → Float32
+            const pcm = new Int16Array(bytes.buffer);
+            const numSamples = pcm.length;
+            if (numSamples === 0) return;
+
+            const buffer = ctx.createBuffer(1, numSamples, PCM_RATE);
+            const ch = buffer.getChannelData(0);
+            for (let i = 0; i < numSamples; i++) {
+                ch[i] = pcm[i] / 32768.0;
+            }
+
+            // 排程播放：緊接上一個封包結束的時間，避免間隙
+            const now = ctx.currentTime;
+            const startTime = Math.max(now, audioNextTimeRef.current);
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(ctx.destination);
+            source.start(startTime);
+            audioNextTimeRef.current = startTime + buffer.duration;
 
         } catch (error) {
             console.error('❌ Audio playback error:', error);
-            showPTTStatus('❌ 音訊播放失敗', 'error');
         }
     };
 
@@ -568,17 +581,109 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
         console.log('📝 Real-time transcription (display only):', transcript);
     };
 
+    // ===== 組長仲裁控制函數 =====
+    const arbiterAllow = (targetUUID: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                type: 'arbiter_allow',
+                channel: pttChannel,
+                targetUUID
+            }));
+            console.log(`👨‍✈️ Arbiter allowed: ${targetUUID}`);
+        }
+    };
+
+    const arbiterDeny = (targetUUID: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                type: 'arbiter_deny',
+                channel: pttChannel,
+                targetUUID
+            }));
+            console.log(`👨‍✈️ Arbiter denied: ${targetUUID}`);
+        }
+    };
+
+    const arbiterRevoke = (targetUUID: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                type: 'arbiter_revoke',
+                channel: pttChannel,
+                targetUUID
+            }));
+            console.log(`👨‍✈️ Arbiter revoked: ${targetUUID}`);
+        }
+    };
+
+    const toggleArbiterMode = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                type: 'arbiter_mode_toggle',
+                enabled: !arbiterMode
+            }));
+        }
+    };
+
+    // ===== 房間加入/離開函數 =====
+    const joinRoom = (roomId: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'join_room', roomId }));
+            setJoinedRooms(prev => new Set(prev).add(roomId));
+            showPTTStatus(`已加入房間：${roomId}`, 'success');
+            console.log(`🚪 Joined room: ${roomId}`);
+        }
+    };
+
+    const leaveRoom = (roomId: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'leave_room', roomId }));
+            setJoinedRooms(prev => {
+                const next = new Set(prev);
+                next.delete(roomId);
+                return next;
+            });
+            showPTTStatus(`已離開房間：${roomId}`, 'info');
+            console.log(`🚪 Left room: ${roomId}`);
+        }
+    };
+
+    const refreshRooms = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'get_active_private_calls' }));
+            console.log('🔄 Refreshing rooms...');
+            showPTTStatus('正在刷新房間列表...', 'info');
+        } else {
+            showPTTStatus('WebSocket 未連接，無法刷新', 'error');
+        }
+    };
+
+    const createTestRoom = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            const testId = `test_${Math.floor(Math.random() * 10000)}`;
+            wsRef.current.send(JSON.stringify({
+                type: 'create_test_room',
+                roomId: testId,
+                from: 'WEB_DEBUG',
+                to: 'TEST_DEVICE'
+            }));
+            console.log('🧪 Creating test room:', testId);
+            showPTTStatus(`建立測試房間: ${testId}`, 'info');
+        }
+    };
+
     // ===== WebSocket 連接（改良版）=====
     useEffect(() => {
-        const connectWebSocket = () => {
+        const connectWebSocket = async () => {
             if (wsRef.current) {
                 wsRef.current.close();
                 wsRef.current = null;
             }
 
             try {
-                console.log(`🔌 Connecting to WebSocket: ${WS_URL} (Attempt ${reconnectAttemptsRef.current + 1})`);
-                const ws = new WebSocket(WS_URL);
+                console.log(`Connecting to WebSocket: ${WS_URL} (Attempt ${reconnectAttemptsRef.current + 1})`);
+                const token = await getAccessToken();
+                const wsUrlWithAuth = token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL;
+                const ws = new WebSocket(wsUrlWithAuth);
                 wsRef.current = ws;
 
                 ws.onopen = () => {
@@ -594,6 +699,21 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                     console.log(`📱 Registering device: ${pttDeviceId}`);
 
                     ws.send(JSON.stringify({ type: 'request_devices' }));
+
+                    // 請求組長仲裁狀態和進行中的私人通話
+                    ws.send(JSON.stringify({ type: 'get_pending_requests', channel: pttChannel }));
+                    ws.send(JSON.stringify({ type: 'get_active_private_calls' }));
+
+                    // 重連後自動重新加入之前已加入的房間
+                    setJoinedRooms(prev => {
+                        if (prev.size > 0) {
+                            console.log(`🔄 Rejoining ${prev.size} rooms after reconnect`);
+                            prev.forEach(roomId => {
+                                ws.send(JSON.stringify({ type: 'join_room', roomId }));
+                            });
+                        }
+                        return prev;
+                    });
 
                     const heartbeat = setInterval(() => {
                         if (ws.readyState === WebSocket.OPEN) {
@@ -758,23 +878,119 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                             setMessages((prev) => [...prev, markNotification]);
                         }
 
-                        // 處理私人通話請求
+                        // 處理私人通話請求（舊版點對點）
                         if (data.type === 'private_call_request') {
                             console.log('📞 Incoming private call from:', data.from);
-                            const accept = window.confirm(`收到來自 ${data.from} 的通話請求，是否接受？`);
-                            if (accept) {
-                                // TODO: 通知 PTTAudio 組件接受通話
-                                showPTTStatus(`📞 已接受來自 ${data.from} 的通話`, 'success');
-                            } else {
-                                showPTTStatus(`📞 已拒絕來自 ${data.from} 的通話`, 'info');
-                            }
+                            showPTTStatus(`📞 收到來自 ${data.from} → ${data.to} 的通話請求`, 'info');
                         }
 
                         // 處理私人通話結束
                         if (data.type === 'private_call_stop') {
                             console.log('📞 Private call ended by:', data.from);
                             showPTTStatus(`📞 ${data.from} 已結束通話`, 'info');
-                            // TODO: 通知 PTTAudio 組件結束通話
+                        }
+
+                        // ===== 組長仲裁相關訊息 =====
+
+                        // BWC 請求發言 → 組長需核准
+                        if (data.type === 'ptt_speech_request') {
+                            console.log('🎙️ Speech request from:', data.requester);
+                            setPendingSpeechRequests(data.pendingRequests || []);
+                            showPTTStatus(`🎙️ ${data.requester} 請求發言（等待核准）`, 'info');
+                        }
+
+                        // 發言者狀態更新
+                        if (data.type === 'ptt_speaker_update') {
+                            console.log('🎙️ Speaker update:', data.speaker, data.action);
+                            setCurrentSpeaker(data.speaker);
+                            if (data.action === 'start' || data.action === 'allow') {
+                                showPTTStatus(`🎙️ ${data.speaker} 正在發言`, 'info');
+                            } else if (data.action === 'stop') {
+                                showPTTStatus(`🛑 ${data.previousSpeaker || ''} 結束發言`, 'info');
+                            } else if (data.action === 'revoke') {
+                                showPTTStatus(`🚫 已撤銷 ${data.revokedFrom} 的發言權`, 'info');
+                            }
+                        }
+
+                        // 發言被拒絕
+                        if (data.type === 'ptt_speech_denied') {
+                            console.log('🚫 Speech denied:', data.requester, data.reason);
+                            showPTTStatus(`🚫 ${data.requester} 發言被拒絕：${data.reason}`, 'error');
+                        }
+
+                        // 等待列表更新
+                        if (data.type === 'ptt_pending_requests_update') {
+                            setPendingSpeechRequests(data.pendingRequests || []);
+                        }
+
+                        // 仲裁模式狀態
+                        if (data.type === 'arbiter_mode_status') {
+                            setArbiterMode(data.enabled);
+                            showPTTStatus(`組長仲裁模式：${data.enabled ? '已啟用' : '已停用'}`, 'info');
+                        }
+
+                        // 等待請求回應
+                        if (data.type === 'pending_requests_response') {
+                            setPendingSpeechRequests(data.pendingRequests || []);
+                            setAllowedSpeakers(data.allowedSpeakers || []);
+                            setCurrentSpeaker(data.currentSpeaker);
+                            setArbiterMode(data.arbiterMode);
+                        }
+
+                        // ===== 私人通話監控 =====
+
+                        // 新房間建立（僅更新列表，不自動加入）
+                        if (data.type === 'private_call_started' && data.call) {
+                            console.log('🚪 Room created:', data.call.privateTopicID);
+                            setActivePrivateCalls(prev => {
+                                if (prev.find(c => c.privateTopicID === data.call.privateTopicID)) return prev;
+                                return [...prev, data.call];
+                            });
+                            showPTTStatus(`🚪 新房間：${data.call.privateTopicID}（${data.call.from} → ${data.call.to}）`, 'info');
+                        }
+
+                        // 私人通話結束
+                        if (data.type === 'private_call_ended' && data.call) {
+                            console.log('📞 Private call ended:', data.call);
+                            setActivePrivateCalls(prev =>
+                                prev.filter(c => c.privateTopicID !== data.call.privateTopicID)
+                            );
+                            // 如果已加入該房間，自動離開
+                            setJoinedRooms(prev => {
+                                if (prev.has(data.call.privateTopicID)) {
+                                    const next = new Set(prev);
+                                    next.delete(data.call.privateTopicID);
+                                    return next;
+                                }
+                                return prev;
+                            });
+                            showPTTStatus(`📞 私人通話結束：${data.call.from} → ${data.call.to}`, 'info');
+                        }
+
+                        // 測試房間建立確認
+                        if (data.type === 'test_room_created') {
+                            console.log('🧪 Test room created:', data.roomId);
+                            showPTTStatus(`測試房間已建立: ${data.roomId}`, 'success');
+                        }
+
+                        // 房間列表回應（僅更新列表，不自動加入）
+                        if (data.type === 'active_private_calls_response') {
+                            console.log('🚪 Rooms response:', JSON.stringify(data.calls), 'Count:', data.count);
+                            setActivePrivateCalls(data.calls || []);
+                        }
+
+                        // 房間加入/離開確認
+                        if (data.type === 'room_joined') {
+                            console.log(`🚪 Room joined confirmed: ${data.roomId}`);
+                            setJoinedRooms(prev => new Set(prev).add(data.roomId));
+                        }
+                        if (data.type === 'room_left') {
+                            console.log(`🚪 Room left confirmed: ${data.roomId}`);
+                            setJoinedRooms(prev => {
+                                const next = new Set(prev);
+                                next.delete(data.roomId);
+                                return next;
+                            });
                         }
 
                         if (data.type === 'mqtt_message' && data.topic && data.data) {
@@ -843,7 +1059,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
         const loadDevices = async () => {
             try {
-                const response = await fetch(`${API_CONFIG.baseUrl}/devices`);
+                const response = await authFetch(`${API_CONFIG.baseUrl}/devices`);
                 if (response.ok) {
                     const data = await response.json();
                     console.log(`📋 Loaded ${data.devices?.length || 0} devices from API`);
@@ -1020,7 +1236,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                 });
 
                 // 發送到後端
-                const response = await fetch(`${API_CONFIG.baseUrl}/ptt/voice-message`, {
+                const response = await authFetch(`${API_CONFIG.baseUrl}/ptt/voice-message`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1093,6 +1309,170 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
     // ===== 渲染 PTT 功能內容 =====
     const renderPTTFunctionContent = () => {
+        if (selectedPTTFunction === 'arbiter') {
+            return (
+                <div className="border border-amber-800/50 rounded-lg p-4 space-y-4 bg-amber-950/30">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-base font-semibold text-amber-300">
+                            <Shield className="w-5 h-5" />
+                            組長仲裁控制
+                        </div>
+                        <button
+                            onClick={toggleArbiterMode}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                                arbiterMode
+                                    ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                    : 'bg-slate-600 hover:bg-slate-500 text-slate-300'
+                            }`}
+                        >
+                            {arbiterMode ? '仲裁模式 ON' : '仲裁模式 OFF'}
+                        </button>
+                    </div>
+
+                    {/* 當前發言者 */}
+                    <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
+                        <div className="text-xs text-slate-400 mb-1">當前發言者</div>
+                        <div className="text-sm font-medium text-slate-200">
+                            {currentSpeaker ? (
+                                <div className="flex items-center justify-between">
+                                    <span className="text-emerald-400">{currentSpeaker}</span>
+                                    <button
+                                        onClick={() => arbiterRevoke(currentSpeaker)}
+                                        className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors"
+                                    >
+                                        撤銷發言權
+                                    </button>
+                                </div>
+                            ) : (
+                                <span className="text-slate-500">無人發言</span>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* 等待核准的發言請求 */}
+                    <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
+                        <div className="text-xs text-slate-400 mb-2">
+                            等待核准的發言請求 ({pendingSpeechRequests.length})
+                        </div>
+                        {pendingSpeechRequests.length === 0 ? (
+                            <div className="text-sm text-slate-500 py-2 text-center">無待核准請求</div>
+                        ) : (
+                            <div className="space-y-2">
+                                {pendingSpeechRequests.map((req) => (
+                                    <div key={req.uuid} className="flex items-center justify-between bg-slate-700/50 rounded-lg p-2">
+                                        <div>
+                                            <div className="text-sm font-medium text-slate-200">{req.uuid}</div>
+                                            <div className="text-xs text-slate-400">
+                                                {new Date(req.timestamp).toLocaleTimeString('zh-TW')}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => arbiterAllow(req.uuid)}
+                                                className="p-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded transition-colors"
+                                                title="允許發言"
+                                            >
+                                                <Check className="w-4 h-4" />
+                                            </button>
+                                            <button
+                                                onClick={() => arbiterDeny(req.uuid)}
+                                                className="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                                                title="拒絕發言"
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 已允許發言的設備 */}
+                    {allowedSpeakers.length > 0 && (
+                        <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
+                            <div className="text-xs text-slate-400 mb-2">已允許發言</div>
+                            <div className="space-y-1">
+                                {allowedSpeakers.map((uuid) => (
+                                    <div key={uuid} className="flex items-center justify-between bg-emerald-900/30 rounded px-3 py-1.5">
+                                        <span className="text-sm text-emerald-300">{uuid}</span>
+                                        <button
+                                            onClick={() => arbiterRevoke(uuid)}
+                                            className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                                        >
+                                            撤銷
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 通話房間 */}
+                    <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
+                        <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+                            <div className="flex items-center gap-2">
+                                <DoorOpen className="w-3 h-3" />
+                                通話房間 ({activePrivateCalls.length})
+                            </div>
+                            <button
+                                onClick={refreshRooms}
+                                className="p-1 rounded bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-blue-300 transition-colors"
+                                title="刷新房間列表"
+                            >
+                                <RefreshCw className="w-3 h-3" />
+                            </button>
+                        </div>
+                        {activePrivateCalls.length === 0 ? (
+                            <div className="text-sm text-slate-500 py-2 text-center">目前沒有房間</div>
+                        ) : (
+                            <div className="space-y-2">
+                                {activePrivateCalls.map((call) => {
+                                    const isJoined = joinedRooms.has(call.privateTopicID);
+                                    return (
+                                        <div key={call.privateTopicID} className={`rounded-lg p-3 border ${
+                                            isJoined
+                                                ? 'bg-emerald-900/30 border-emerald-700/50'
+                                                : 'bg-blue-900/30 border-blue-800/30'
+                                        }`}>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <div className="text-sm font-medium text-blue-300">
+                                                    {call.privateTopicID}
+                                                </div>
+                                                <button
+                                                    onClick={() => isJoined ? leaveRoom(call.privateTopicID) : joinRoom(call.privateTopicID)}
+                                                    className={`px-2.5 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors ${
+                                                        isJoined
+                                                            ? 'bg-red-600 hover:bg-red-700 text-white'
+                                                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                                    }`}
+                                                >
+                                                    {isJoined ? (
+                                                        <><LogOut className="w-3 h-3" /> 退出</>
+                                                    ) : (
+                                                        <><LogIn className="w-3 h-3" /> 加入</>
+                                                    )}
+                                                </button>
+                                            </div>
+                                            <div className="text-xs text-slate-400">
+                                                {call.from} → {call.to} | {new Date(call.startTime).toLocaleTimeString('zh-TW')}
+                                            </div>
+                                            {isJoined && (
+                                                <div className="flex items-center gap-1 mt-1.5 text-xs text-emerald-400">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                                    已加入房間
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
         if (selectedPTTFunction === 'gps') {
             return (
                 <div className="border border-emerald-800/50 rounded-lg p-4 space-y-3 bg-emerald-950/50">
@@ -1326,6 +1706,27 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
 
             {/* 右側：設備資訊面板 (50%) - 獨立滾動 */}
             <div className="w-1/2 h-full flex flex-col border-l border-slate-700/50 overflow-hidden">
+                {/* 群組廣播狀態指示器 */}
+                {currentSpeaker && (
+                    <div className="flex-shrink-0 bg-emerald-900/80 border-b border-emerald-700/50 px-4 py-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="text-sm font-semibold text-emerald-200">
+                                群組廣播中
+                            </span>
+                            <span className="text-sm text-emerald-300">
+                                {currentSpeaker}
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Mic className="w-4 h-4 text-emerald-400 animate-pulse" />
+                            <span className="text-xs text-emerald-400">
+                                {pttChannel}
+                            </span>
+                        </div>
+                    </div>
+                )}
+
                 {/* 固定的狀態欄和按鈕 */}
                 <div className="flex-shrink-0 bg-slate-800/50 border-b border-slate-700/50">
                     {/* 狀態欄 */}
@@ -1364,7 +1765,7 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                 setShowPTTControl(!showPTTControl);
                                 if (!showPTTControl) setShowCommunication(false);
                             }}
-                            className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors ${
+                            className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 transition-colors relative ${
                                 showPTTControl
                                     ? 'bg-purple-600 text-white hover:bg-purple-700'
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
@@ -1372,7 +1773,26 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                         >
                             <Radio className="w-3 h-3" />
                             PTT
+                            {pendingSpeechRequests.length > 0 && (
+                                <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
+                                    {pendingSpeechRequests.length}
+                                </span>
+                            )}
                         </button>
+                        {/* 仲裁模式指示 */}
+                        {arbiterMode && (
+                            <div className="flex items-center gap-1 text-xs text-amber-400">
+                                <Shield className="w-3 h-3" />
+                                <span>仲裁</span>
+                            </div>
+                        )}
+                        {/* 當前發言者指示 */}
+                        {currentSpeaker && (
+                            <div className="flex items-center gap-1 text-xs text-emerald-400">
+                                <Mic className="w-3 h-3" />
+                                <span className="truncate max-w-[80px]">{currentSpeaker}</span>
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -1411,6 +1831,88 @@ const GPSTracking: React.FC<GPSTrackingProps> = ({ userName }) => {
                                 </div>
                             )}
                         </div>
+                    </div>
+
+                    {/* 通話房間（一直顯示） */}
+                    <div className="bg-blue-950/50 rounded-lg p-4 border border-blue-800/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-blue-300">
+                                <DoorOpen className="w-4 h-4" />
+                                通話房間 ({activePrivateCalls.length})
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {joinedRooms.size > 0 && (
+                                    <div className="text-xs text-emerald-400 flex items-center gap-1">
+                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                        已加入 {joinedRooms.size} 間
+                                    </div>
+                                )}
+                                <button
+                                    onClick={refreshRooms}
+                                    className="p-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-blue-300 transition-colors"
+                                    title="刷新房間列表"
+                                >
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                    onClick={createTestRoom}
+                                    className="px-2 py-1 rounded-lg bg-yellow-700/50 hover:bg-yellow-600/50 text-yellow-300 text-xs transition-colors"
+                                    title="建立測試房間（除錯用）"
+                                >
+                                    + 測試
+                                </button>
+                            </div>
+                        </div>
+                        {activePrivateCalls.length === 0 ? (
+                            <div className="text-sm text-slate-500 py-3 text-center">
+                                <DoorClosed className="w-5 h-5 mx-auto mb-1 opacity-50" />
+                                目前沒有房間
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {activePrivateCalls.map((call) => {
+                                    const isJoined = joinedRooms.has(call.privateTopicID);
+                                    return (
+                                        <div key={call.privateTopicID} className={`rounded-lg p-3 border ${
+                                            isJoined
+                                                ? 'bg-emerald-900/40 border-emerald-700/50'
+                                                : 'bg-slate-800/50 border-slate-700/50'
+                                        }`}>
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <div className="text-sm font-medium text-blue-300">
+                                                        {call.privateTopicID}
+                                                    </div>
+                                                    <div className="text-xs text-slate-400 mt-0.5">
+                                                        {call.from} → {call.to} | {new Date(call.startTime).toLocaleTimeString('zh-TW')}
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => isJoined ? leaveRoom(call.privateTopicID) : joinRoom(call.privateTopicID)}
+                                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
+                                                        isJoined
+                                                            ? 'bg-red-600 hover:bg-red-700 text-white'
+                                                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                                    }`}
+                                                >
+                                                    {isJoined ? (
+                                                        <><LogOut className="w-3.5 h-3.5" /> 退出房間</>
+                                                    ) : (
+                                                        <><LogIn className="w-3.5 h-3.5" /> 加入房間</>
+                                                    )}
+                                                </button>
+                                            </div>
+                                            {isJoined && (
+                                                <div className="flex items-center gap-1 mt-2 text-xs text-emerald-400">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                                    已加入 - 可聽到此房間的語音
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
 
                     {/* 通訊面板 */}
