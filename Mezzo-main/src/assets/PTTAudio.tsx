@@ -394,7 +394,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
 
     const startGroupRecording = async () => {
         try {
-            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+            const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
             setRequestingMic(true);
 
             const tag = 'PTT_MSG_TYPE_SPEECH_START';
@@ -438,7 +438,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
 
     const sendMicResponse = async (requesterUUID: string, accept: boolean) => {
         try {
-            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+            const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
             const tag = 'PTT_MSG_TYPE_MIC_RESPONSE';
             const data = `${requesterUUID},${accept ? 'accept' : 'deny'}`;
@@ -556,7 +556,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         setHasPermission(false);
 
         try {
-            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+            const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
             const tag = 'PTT_MSG_TYPE_SPEECH_STOP';
             const data = '';
@@ -599,7 +599,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         setRandomCallId(callTopicId);
 
         try {
-            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+            const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
             const tag = 'PRIVATE_SPK_REQ';
             const data = `${privateTargetId},${callTopicId}`;
@@ -650,7 +650,7 @@ const PTTAudio = ({ deviceId, channel, onAudioSend, onSpeechToText, ws }: PTTAud
         isRecordingRef.current = false;
 
         try {
-            const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:4000' : `http://${window.location.hostname}:4000`;
+            const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
             const tag = 'PRIVATE_SPK_STOP';
             const data = privateTargetId;

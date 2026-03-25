@@ -277,11 +277,7 @@ const CameraMap: React.FC<CameraMapProps> = ({
   // ===== WebSocket 連接 =====
   useEffect(() => {
     const connectWebSocket = () => {
-      const hostname = window.location.hostname;
-      const baseUrl = hostname === 'localhost' || hostname === '127.0.0.1' 
-        ? 'http://localhost:4000'
-        : `http://${hostname}:4000`;
-      const wsUrl = baseUrl.replace('http', 'ws').replace(':4000', ':4001');
+      const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:4001';
 
       console.log('[CameraMap] WebSocket connecting to:', wsUrl);
       const ws = new WebSocket(wsUrl);
